@@ -47,6 +47,7 @@ idearank/
 pip install -e .
 
 # With optional dependencies
+pip install -e ".[chroma]"    # For Chroma Cloud (recommended)
 pip install -e ".[openai]"    # For OpenAI embeddings
 pip install -e ".[faiss]"     # For FAISS ANN search
 pip install -e ".[ml]"        # For scikit-learn topic models
@@ -221,21 +222,54 @@ provider = LDATopicModelProvider(model_path="path/to/lda.pkl")
 from idearank.providers import DummyNeighborhoodProvider
 provider = DummyNeighborhoodProvider()
 
+# Chroma Cloud (recommended for production)
+from idearank.providers.chroma import ChromaProvider
+chroma = ChromaProvider(
+    api_key="ck-...",
+    tenant="...",
+    database="...",
+    embedding_function="default",
+)
+# Provides BOTH embedding and neighborhood providers
+embedding_provider = chroma.get_embedding_provider()
+neighborhood_provider = chroma.get_neighborhood_provider()
+
 # FAISS (for production)
 from idearank.providers import FAISSNeighborhoodProvider
 provider = FAISSNeighborhoodProvider(dimension=384)
 ```
 
+**See [`CHROMA_SETUP.md`](CHROMA_SETUP.md) for complete Chroma Cloud setup guide.**
+
 ## Examples
 
 See the `examples/` directory:
 
-- `basic_usage.py`: End-to-end example
+- `basic_usage.py`: End-to-end example with dummy providers
 - `custom_weights.py`: Comparing different weight configurations
+- `chroma_usage.py`: Using Chroma Cloud for production
+- **`youtube_pipeline_simple_test.py`**: **NEW!** Complete YouTube → IdeaRank pipeline (works without API keys)
+- `youtube_pipeline_demo.py`: Full pipeline with real YouTube data
 
 ```bash
+# Basic demo (no setup needed)
 python examples/basic_usage.py
+
+# Weight comparison
 python examples/custom_weights.py
+
+# Chroma Cloud demo (requires credentials)
+export CHROMA_API_KEY="ck-..."
+export CHROMA_TENANT="..."
+export CHROMA_DATABASE="..."
+python examples/chroma_usage.py
+
+# YouTube pipeline test (works immediately!)
+python examples/youtube_pipeline_simple_test.py
+
+# YouTube pipeline with real data (requires YouTube API key)
+export YOUTUBE_API_KEY="AIza..."
+python examples/youtube_pipeline_demo.py
 ```
 
 ## Use Cases
