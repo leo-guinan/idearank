@@ -57,16 +57,16 @@ class TopicMixture:
 
 
 @dataclass
-class Video:
-    """Represents a video at a specific point in time."""
+class ContentItem:
+    """Represents a piece of content from any source (video, blog post, tweet, etc.)."""
     
-    id: str  # Unique identifier (e.g., YouTube video ID)
-    channel_id: str
+    id: str  # Unique identifier
+    content_source_id: str  # ID of the source that published this
     title: str
     description: str
-    transcript: str
+    body: str  # Main content text (transcript for videos, post content for blogs, tweet text for Twitter)
     published_at: datetime
-    snapshot_time: datetime  # When this data was captured
+    captured_at: datetime  # When this data was captured/fetched
     
     # Computed representations
     embedding: Optional[Embedding] = None
@@ -77,7 +77,7 @@ class Video:
     impression_count: int = 0
     watch_time_seconds: float = 0.0
     avg_view_duration: float = 0.0
-    video_duration: float = 0.0
+    content_duration: float = 0.0  # Duration in seconds (for videos/audio)
     
     # Trust signals
     has_citations: bool = False
@@ -92,7 +92,7 @@ class Video:
     @property
     def full_text(self) -> str:
         """Combined text for embedding generation."""
-        parts = [self.title, self.description, self.transcript]
+        parts = [self.title, self.description, self.body]
         return " ".join(p for p in parts if p)
     
     @property
@@ -105,57 +105,57 @@ class Video:
     @property
     def completion_rate(self) -> float:
         """CR metric for Quality factor."""
-        if self.video_duration == 0:
+        if self.content_duration == 0:
             return 0.0
-        return min(1.0, self.avg_view_duration / self.video_duration)
+        return min(1.0, self.avg_view_duration / self.content_duration)
 
 
 @dataclass
-class Channel:
-    """Represents a content channel (e.g., YouTube channel)."""
+class ContentSource:
+    """Represents a content source (YouTube channel, blog, Twitter account, etc.)."""
     
     id: str
     name: str
     description: str
     created_at: datetime
     
-    # Video history (ordered by published_at)
-    videos: list[Video] = field(default_factory=list)
+    # Content history (ordered by published_at)
+    content_items: list[ContentItem] = field(default_factory=list)
     
-    # Channel-level metrics
+    # Source-level metrics
     subscriber_count: int = 0
     total_views: int = 0
     
-    def get_videos_in_window(
+    def get_content_in_window(
         self, 
         end_time: datetime, 
         window_days: int = 180
-    ) -> list[Video]:
-        """Get videos published within a time window."""
+    ) -> list[ContentItem]:
+        """Get content items published within a time window."""
         from datetime import timedelta
         start_time = end_time - timedelta(days=window_days)
         
         return [
-            v for v in self.videos
-            if start_time <= v.published_at <= end_time
+            item for item in self.content_items
+            if start_time <= item.published_at <= end_time
         ]
     
-    def get_prior_video(
+    def get_prior_content(
         self, 
-        video: Video, 
+        content_item: ContentItem, 
         max_lookback_days: int = 270
-    ) -> Optional[Video]:
-        """Get the most recent video before the given video."""
+    ) -> Optional[ContentItem]:
+        """Get the most recent content item before the given one."""
         from datetime import timedelta
-        cutoff = video.published_at - timedelta(days=max_lookback_days)
+        cutoff = content_item.published_at - timedelta(days=max_lookback_days)
         
-        prior_videos = [
-            v for v in self.videos
-            if cutoff <= v.published_at < video.published_at
+        prior_items = [
+            item for item in self.content_items
+            if cutoff <= item.published_at < content_item.published_at
         ]
         
-        if not prior_videos:
+        if not prior_items:
             return None
         
-        return max(prior_videos, key=lambda v: v.published_at)
+        return max(prior_items, key=lambda item: item.published_at)
 

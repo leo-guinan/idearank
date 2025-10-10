@@ -1,6 +1,6 @@
 """Quality (Q) factor: Human time spent learning, de-biased from virality.
 
-Q(v,t) = nzscore(WTPI(v,t)) · nzscore(CR(v,t))
+Q(item,t) = nzscore(WTPI(item,t)) · nzscore(CR(item,t))
 
 where nzscore = z-score normalized within topic & size bucket, clipped to [0,1].
 
@@ -11,7 +11,7 @@ from typing import Any, Optional
 import numpy as np
 
 from idearank.factors.base import BaseFactor, FactorResult
-from idearank.models import Video, Channel
+from idearank.models import ContentItem, ContentSource
 from idearank.config import QualityConfig
 
 
@@ -28,8 +28,8 @@ class QualityFactor(BaseFactor):
     
     def compute(
         self, 
-        video: Video, 
-        channel: Channel,
+        content_item: ContentItem, 
+        content_source: ContentSource,
         context: Optional[dict[str, Any]] = None
     ) -> FactorResult:
         """Compute quality score.
@@ -43,10 +43,10 @@ class QualityFactor(BaseFactor):
         context = context or {}
         
         # Get watch time per impression
-        wtpi = video.watch_time_per_impression
+        wtpi = content_item.watch_time_per_impression
         
         # Get completion rate
-        cr = video.completion_rate
+        cr = content_item.completion_rate
         
         # Normalize WTPI
         if 'wtpi_distribution' in context:
@@ -90,8 +90,8 @@ class QualityFactor(BaseFactor):
             },
             metadata={
                 'has_distribution': 'wtpi_distribution' in context,
-                'view_count': video.view_count,
-                'impression_count': video.impression_count,
+                'view_count': content_item.view_count,
+                'impression_count': content_item.impression_count,
             }
         )
     

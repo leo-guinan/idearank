@@ -5,7 +5,7 @@ Orchestrates:
 2. Topic modeling
 3. Neighborhood search
 4. Factor computation
-5. Video & channel scoring
+5. Content item & source scoring
 6. Optional network layer
 """
 
@@ -13,9 +13,9 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import logging
 
-from idearank.models import Video, Channel
+from idearank.models import ContentItem, ContentSource
 from idearank.config import IdeaRankConfig
-from idearank.scorer import IdeaRankScorer, IdeaRankScore, ChannelScorer, ChannelRankScore
+from idearank.scorer import IdeaRankScorer, IdeaRankScore, ContentSourceScorer, ContentSourceRankScore
 from idearank.network import KnowledgeRankComputer, KnowledgeRankScore
 from idearank.providers import (
     EmbeddingProvider,
@@ -43,108 +43,117 @@ class IdeaRankPipeline:
         self.neighborhood_provider = neighborhood_provider
         
         # Initialize scorers
-        self.video_scorer = IdeaRankScorer(config)
-        self.channel_scorer = ChannelScorer(config)
+        self.content_scorer = IdeaRankScorer(config)
+        self.source_scorer = ContentSourceScorer(config)
         self.network_computer = KnowledgeRankComputer(config.network)
     
-    def process_video(self, video: Video) -> Video:
-        """Add embeddings and topics to a video.
+    def process_content_item(self, content_item: ContentItem) -> ContentItem:
+        """Add embeddings and topics to a content item.
         
-        Modifies video in-place and returns it.
+        Modifies content item in-place and returns it.
         """
-        if video.embedding is None:
-            logger.debug(f"Generating embedding for video {video.id}")
-            video.embedding = self.embedding_provider.embed(video.full_text)
+        if content_item.embedding is None:
+            logger.debug(f"Generating embedding for content item {content_item.id}")
+            content_item.embedding = self.embedding_provider.embed(content_item.full_text)
         
-        if video.topic_mixture is None:
-            logger.debug(f"Generating topics for video {video.id}")
-            video.topic_mixture = self.topic_provider.get_topics(video.full_text)
+        if content_item.topic_mixture is None:
+            logger.debug(f"Generating topics for content item {content_item.id}")
+            content_item.topic_mixture = self.topic_provider.get_topics(content_item.full_text)
         
-        return video
+        return content_item
     
-    def process_videos_batch(self, videos: List[Video]) -> List[Video]:
-        """Process multiple videos efficiently."""
-        # Generate embeddings for videos that don't have them
-        videos_needing_embeddings = [v for v in videos if v.embedding is None]
-        if videos_needing_embeddings:
-            logger.info(f"Generating embeddings for {len(videos_needing_embeddings)} videos")
-            texts = [v.full_text for v in videos_needing_embeddings]
+    def process_content_batch(self, content_items: List[ContentItem]) -> List[ContentItem]:
+        """Process multiple content items efficiently."""
+        # Generate embeddings for items that don't have them
+        items_needing_embeddings = [item for item in content_items if item.embedding is None]
+        if items_needing_embeddings:
+            logger.info(f"Generating embeddings for {len(items_needing_embeddings)} content items")
+            texts = [item.full_text for item in items_needing_embeddings]
             embeddings = self.embedding_provider.embed_batch(texts)
-            for video, embedding in zip(videos_needing_embeddings, embeddings):
-                video.embedding = embedding
+            for item, embedding in zip(items_needing_embeddings, embeddings):
+                item.embedding = embedding
+        
+        # Fit topic model if using LDA (needs corpus)
+        from idearank.providers.topics import LDATopicModelProvider
+        if isinstance(self.topic_provider, LDATopicModelProvider):
+            if not self.topic_provider.is_fitted:
+                # Fit on all available texts
+                all_texts = [item.full_text for item in content_items]
+                logger.info(f"Fitting LDA topic model on {len(all_texts)} documents...")
+                self.topic_provider.fit(all_texts)
         
         # Generate topics
-        videos_needing_topics = [v for v in videos if v.topic_mixture is None]
-        if videos_needing_topics:
-            logger.info(f"Generating topics for {len(videos_needing_topics)} videos")
-            texts = [v.full_text for v in videos_needing_topics]
+        items_needing_topics = [item for item in content_items if item.topic_mixture is None]
+        if items_needing_topics:
+            logger.info(f"Generating topics for {len(items_needing_topics)} content items")
+            texts = [item.full_text for item in items_needing_topics]
             topics = self.topic_provider.get_topics_batch(texts)
-            for video, topic in zip(videos_needing_topics, topics):
-                video.topic_mixture = topic
+            for item, topic in zip(items_needing_topics, topics):
+                item.topic_mixture = topic
         
-        return videos
+        return content_items
     
-    def index_videos(self, videos: List[Video]) -> None:
-        """Add videos to the neighborhood index."""
-        logger.info(f"Indexing {len(videos)} videos for ANN search")
-        self.neighborhood_provider.index_videos_batch(videos)
+    def index_content(self, content_items: List[ContentItem]) -> None:
+        """Add content items to the neighborhood index."""
+        logger.info(f"Indexing {len(content_items)} content items for ANN search")
+        self.neighborhood_provider.index_content_batch(content_items)
     
-    def score_video(
+    def score_content_item(
         self,
-        video: Video,
-        channel: Channel,
+        content_item: ContentItem,
+        content_source: ContentSource,
         compute_analytics_context: bool = True,
     ) -> IdeaRankScore:
-        """Score a single video.
+        """Score a single content item.
         
         Args:
-            video: Video to score
-            channel: Channel containing the video
+            content_item: Content item to score
+            content_source: Source containing the content item
             compute_analytics_context: Whether to compute analytics normalization
             
         Returns:
             IdeaRankScore
         """
-        # Ensure video has embeddings and topics
-        self.process_video(video)
+        # Ensure content item has embeddings and topics
+        self.process_content_item(content_item)
         
         # Build context
-        context = self._build_video_context(video, channel, compute_analytics_context)
+        context = self._build_content_context(content_item, content_source, compute_analytics_context)
         
         # Score
-        return self.video_scorer.score_video(video, channel, context)
+        return self.content_scorer.score_content(content_item, content_source, context)
     
-    def _build_video_context(
+    def _build_content_context(
         self,
-        video: Video,
-        channel: Channel,
+        content_item: ContentItem,
+        content_source: ContentSource,
         compute_analytics: bool = True,
     ) -> Dict[str, Any]:
-        """Build context dict for video scoring."""
+        """Build context dict for content item scoring."""
         context: Dict[str, Any] = {}
         
         # Global neighbors (for Uniqueness)
-        if video.embedding is not None:
+        if content_item.embedding is not None:
             global_neighbors = self.neighborhood_provider.find_global_neighbors(
-                video.embedding,
+                content_item.embedding,
                 k=self.config.uniqueness.k_global,
-                exclude_ids=[video.id],
+                exclude_ids=[content_item.id],
             )
             context['global_neighbors'] = global_neighbors
         
-        # Intra-channel neighbors (for Cohesion and Learning)
-        if video.embedding is not None:
-            intra_neighbors = self.neighborhood_provider.find_intra_channel_neighbors(
-                video.embedding,
-                channel.id,
+        # Intra-source neighbors (for Cohesion and Learning)
+        if content_item.embedding is not None:
+            intra_neighbors = self.neighborhood_provider.find_intra_source_neighbors(
+                content_item.embedding,
+                content_source.id,
                 k=self.config.cohesion.k_intra,
-                exclude_ids=[video.id],
+                exclude_ids=[content_item.id],
             )
-            # Extract just the videos
-            context['intra_neighbors'] = [v for v, _ in intra_neighbors]
+            # Extract just the content items
+            context['intra_neighbors'] = [item for item, _ in intra_neighbors]
         
-        # Prior video (for Learning)
-        context['prior_video'] = channel.get_prior_video(video)
+        # Prior content item (for Learning)
+        context['prior_content'] = content_source.get_prior_content(content_item)
         
         # Analytics normalization (for Quality)
         if compute_analytics:
@@ -155,87 +164,87 @@ class IdeaRankPipeline:
         
         return context
     
-    def score_channel(
+    def score_source(
         self,
-        channel: Channel,
+        content_source: ContentSource,
         end_time: Optional[datetime] = None,
-    ) -> ChannelRankScore:
-        """Score a channel.
+    ) -> ContentSourceRankScore:
+        """Score a content source.
         
         Args:
-            channel: Channel to score
+            content_source: Content source to score
             end_time: End of evaluation window
             
         Returns:
-            ChannelRankScore
+            ContentSourceRankScore
         """
-        # Ensure all videos are processed
-        self.process_videos_batch(channel.videos)
+        # Ensure all content items are processed
+        self.process_content_batch(content_source.content_items)
         
-        # Score all videos in the window
-        videos_in_window = channel.get_videos_in_window(
+        # Score all content items in the window
+        items_in_window = content_source.get_content_in_window(
             end_time or datetime.utcnow(),
-            window_days=self.config.channel.window_days,
+            window_days=self.config.content_source.window_days,
         )
         
-        video_scores = {}
-        for video in videos_in_window:
-            score = self.score_video(video, channel, compute_analytics_context=True)
-            video_scores[video.id] = score
+        content_scores = {}
+        for item in items_in_window:
+            score = self.score_content_item(item, content_source, compute_analytics_context=True)
+            content_scores[item.id] = score
         
-        # Score channel
-        return self.channel_scorer.score_channel(
-            channel,
+        # Score source
+        return self.source_scorer.score_source(
+            content_source,
             end_time=end_time,
-            video_scores=video_scores,
+            content_scores=content_scores,
         )
     
-    def score_channels_with_network(
+    def score_sources_with_network(
         self,
-        channels: List[Channel],
+        content_sources: List[ContentSource],
         reference_time: Optional[datetime] = None,
     ) -> Dict[str, KnowledgeRankScore]:
-        """Score multiple channels with network effects.
+        """Score multiple content sources with network effects.
         
         Args:
-            channels: Channels to score
+            content_sources: Content sources to score
             reference_time: Reference time for evaluation
             
         Returns:
-            Dict mapping channel_id to KnowledgeRankScore
+            Dict mapping content_source_id to KnowledgeRankScore
         """
-        # Process all videos
-        all_videos = [v for c in channels for v in c.videos]
-        self.process_videos_batch(all_videos)
-        self.index_videos(all_videos)
+        # Process all content items
+        all_items = [item for source in content_sources for item in source.content_items]
+        self.process_content_batch(all_items)
+        self.index_content(all_items)
         
-        # Score all channels
-        logger.info(f"Scoring {len(channels)} channels")
-        channel_scores = {}
-        for channel in channels:
-            score = self.score_channel(channel, end_time=reference_time)
-            channel_scores[channel.id] = score
+        # Score all sources
+        logger.info(f"Scoring {len(content_sources)} content sources")
+        source_scores = {}
+        for source in content_sources:
+            score = self.score_source(source, end_time=reference_time)
+            source_scores[source.id] = score
         
         # Compute network layer
         if self.config.network.enabled:
             logger.info("Computing KnowledgeRank network layer")
             kr_scores = self.network_computer.compute_knowledge_rank(
-                channels,
-                channel_scores,
+                content_sources,
+                source_scores,
                 reference_time,
             )
         else:
             # Convert to KnowledgeRank format without network
             kr_scores = {
-                c.id: KnowledgeRankScore(
-                    channel_id=c.id,
-                    knowledge_rank=channel_scores[c.id].score,
-                    idea_rank=channel_scores[c.id].score,
+                source.id: KnowledgeRankScore(
+                    content_source_id=source.id,
+                    knowledge_rank=source_scores[source.id].score,
+                    idea_rank=source_scores[source.id].score,
                     influence_bonus=0.0,
                     outgoing_influence=[],
                     incoming_influence=[],
                 )
-                for c in channels
+                for source in content_sources
             }
         
         return kr_scores

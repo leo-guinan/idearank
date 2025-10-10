@@ -3,7 +3,7 @@
 import numpy as np
 from datetime import datetime, timedelta
 
-from idearank.models import Embedding, TopicMixture, Video, Channel
+from idearank.models import Embedding, TopicMixture, ContentItem, ContentSource
 
 
 def test_embedding_cosine_similarity():
@@ -35,92 +35,92 @@ def test_topic_mixture_entropy():
     assert tm1.entropy() > tm2.entropy()
 
 
-def test_video_metrics():
-    """Test video analytics metrics."""
-    video = Video(
-        id="test_video",
-        channel_id="test_channel",
+def test_content_item_metrics():
+    """Test content item analytics metrics."""
+    item = ContentItem(
+        id="test_item",
+        content_source_id="test_source",
         title="Test",
         description="Test",
-        transcript="Test",
+        body="Test",
         published_at=datetime.utcnow(),
-        snapshot_time=datetime.utcnow(),
+        captured_at=datetime.utcnow(),
         view_count=1000,
         impression_count=5000,
         watch_time_seconds=100000.0,
         avg_view_duration=200.0,
-        video_duration=300.0,
+        content_duration=300.0,
     )
     
     # WTPI
-    assert video.watch_time_per_impression == 100000.0 / 5000
+    assert item.watch_time_per_impression == 100000.0 / 5000
     
     # Completion rate
-    assert abs(video.completion_rate - (200.0 / 300.0)) < 1e-6
+    assert abs(item.completion_rate - (200.0 / 300.0)) < 1e-6
 
 
-def test_channel_video_window():
-    """Test channel video windowing."""
+def test_source_content_window():
+    """Test content source windowing."""
     base_time = datetime(2024, 1, 1)
-    videos = [
-        Video(
-            id=f"video_{i}",
-            channel_id="test",
-            title=f"Video {i}",
+    content_items = [
+        ContentItem(
+            id=f"item_{i}",
+            content_source_id="test",
+            title=f"Content {i}",
             description="",
-            transcript="",
+            body="",
             published_at=base_time + timedelta(days=i * 30),
-            snapshot_time=datetime.utcnow(),
+            captured_at=datetime.utcnow(),
         )
-        for i in range(12)  # 12 months of videos
+        for i in range(12)  # 12 months of content
     ]
     
-    channel = Channel(
+    content_source = ContentSource(
         id="test",
         name="Test",
         description="",
         created_at=base_time,
-        videos=videos,
+        content_items=content_items,
     )
     
-    # Get videos in 180-day window ending at month 11
+    # Get content in 180-day window ending at month 11
     end_time = base_time + timedelta(days=11 * 30)
-    windowed = channel.get_videos_in_window(end_time, window_days=180)
+    windowed = content_source.get_content_in_window(end_time, window_days=180)
     
-    # Should get roughly 6 months of videos
+    # Should get roughly 6 months of content
     assert 5 <= len(windowed) <= 7
 
 
-def test_channel_prior_video():
-    """Test finding prior video."""
+def test_source_prior_content():
+    """Test finding prior content."""
     base_time = datetime(2024, 1, 1)
-    videos = [
-        Video(
-            id=f"video_{i}",
-            channel_id="test",
-            title=f"Video {i}",
+    content_items = [
+        ContentItem(
+            id=f"item_{i}",
+            content_source_id="test",
+            title=f"Content {i}",
             description="",
-            transcript="",
+            body="",
             published_at=base_time + timedelta(days=i * 10),
-            snapshot_time=datetime.utcnow(),
+            captured_at=datetime.utcnow(),
         )
         for i in range(10)
     ]
     
-    channel = Channel(
+    content_source = ContentSource(
         id="test",
         name="Test",
         description="",
         created_at=base_time,
-        videos=videos,
+        content_items=content_items,
     )
     
-    # Get prior to video 5
-    prior = channel.get_prior_video(videos[5])
+    # Get prior to item 5
+    prior = content_source.get_prior_content(content_items[5])
     assert prior is not None
-    assert prior.id == "video_4"
+    assert prior.id == "item_4"
     
-    # First video has no prior
-    prior_first = channel.get_prior_video(videos[0])
+    # First item has no prior
+    prior_first = content_source.get_prior_content(content_items[0])
     assert prior_first is None
 

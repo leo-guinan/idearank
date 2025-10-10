@@ -1,6 +1,6 @@
-"""Cohesion (C) factor: How well does the video fit the channel's conceptual lattice?
+"""Cohesion (C) factor: How well does the content fit the source's conceptual lattice?
 
-C(v,t) = C_topic(v,t) · (1 - contradiction_rate_S(t))
+C(item,t) = C_topic(item,t) · (1 - contradiction_rate_S(t))
 
 where C_topic = 1 / (1 + H(mean(topic_mixtures)))
 
@@ -11,12 +11,12 @@ from typing import Any, Optional
 import numpy as np
 
 from idearank.factors.base import BaseFactor, FactorResult
-from idearank.models import Video, Channel, TopicMixture
+from idearank.models import ContentItem, ContentSource, TopicMixture
 from idearank.config import CohesionConfig
 
 
 class CohesionFactor(BaseFactor):
-    """Computes how cohesive a video is with its channel's theme."""
+    """Computes how cohesive a content item is with its source's theme."""
     
     def __init__(self, config: CohesionConfig):
         super().__init__(config)
@@ -28,27 +28,27 @@ class CohesionFactor(BaseFactor):
     
     def compute(
         self, 
-        video: Video, 
-        channel: Channel,
+        content_item: ContentItem, 
+        content_source: ContentSource,
         context: Optional[dict[str, Any]] = None
     ) -> FactorResult:
         """Compute cohesion score.
         
         Context should contain:
-            - 'intra_neighbors': list of Videos from the same channel
+            - 'intra_neighbors': list of ContentItems from the same source
             - 'contradiction_rate': float (optional, defaults to 0)
         """
         if context is None or 'intra_neighbors' not in context:
             raise ValueError(
                 "Cohesion requires 'intra_neighbors' in context. "
-                "Run intra-channel ANN search first."
+                "Run intra-source ANN search first."
             )
         
         intra_neighbors = context['intra_neighbors']
         contradiction_rate = context.get('contradiction_rate', 0.0)
         
         # Compute topical cohesion
-        c_topic = self._compute_topic_cohesion(video, intra_neighbors)
+        c_topic = self._compute_topic_cohesion(content_item, intra_neighbors)
         
         # Apply contradiction penalty
         if self.config.use_contradiction_penalty:
@@ -75,8 +75,8 @@ class CohesionFactor(BaseFactor):
     
     def _compute_topic_cohesion(
         self, 
-        video: Video, 
-        neighbors: list[Video]
+        content_item: ContentItem, 
+        neighbors: list[ContentItem]
     ) -> float:
         """Compute C_topic = 1 / (1 + H(mean_topic_mixture))."""
         

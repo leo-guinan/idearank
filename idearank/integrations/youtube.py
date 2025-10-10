@@ -8,6 +8,9 @@ from datetime import datetime
 from typing import List, Optional
 import logging
 import re
+import time
+import tempfile
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +23,15 @@ except ImportError:
     YOUTUBE_AVAILABLE = False
     logger.warning("YouTube libraries not installed. Install with: pip install -e '.[youtube]'")
 
-# Gladia is not available via pip, would need custom integration
-GLADIA_AVAILABLE = False
+# Gladia API integration
+try:
+    import requests
+    GLADIA_AVAILABLE = True
+except ImportError:
+    GLADIA_AVAILABLE = False
+    logger.warning("requests library not installed. Install with: pip install requests")
+
+# Note: yt-dlp no longer needed - Gladia accepts YouTube URLs directly
 
 
 @dataclass
@@ -61,12 +71,14 @@ class YouTubeClient:
         self,
         youtube_api_key: Optional[str] = None,
         gladia_api_key: Optional[str] = None,
+        storage=None,  # Optional SQLiteStorage for transcript caching
     ):
         """Initialize YouTube client.
         
         Args:
             youtube_api_key: YouTube Data API v3 key (optional, uses quota)
             gladia_api_key: Gladia API key for transcription (optional)
+            storage: SQLiteStorage instance for transcript caching (optional)
         """
         if not YOUTUBE_AVAILABLE:
             raise ImportError(
@@ -76,6 +88,7 @@ class YouTubeClient:
         
         self.youtube_api_key = youtube_api_key
         self.gladia_api_key = gladia_api_key
+        self.storage = storage
         
         # Initialize YouTube API client if key provided
         if youtube_api_key:
@@ -300,12 +313,18 @@ class YouTubeClient:
         return hours * 3600 + minutes * 60 + seconds
     
     def _get_video_transcript(self, video_id: str) -> tuple[Optional[str], str]:
-        """Get video transcript from YouTube or Gladia.
+        """Get video transcript from cache, YouTube, or Gladia.
         
         Returns:
             (transcript_text, source)
         """
-        # Try YouTube's auto-generated or uploaded transcripts first
+        # First, check if we have a cached transcript in SQLite
+        if self.storage:
+            cached = self.storage.get_video_transcript(video_id)
+            if cached:
+                return cached  # (transcript_text, source)
+        
+        # Try YouTube's auto-generated or uploaded transcripts
         try:
             transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
             transcript_text = ' '.join([entry['text'] for entry in transcript_list])
@@ -329,19 +348,140 @@ class YouTubeClient:
     def _transcribe_with_gladia(self, video_id: str) -> str:
         """Transcribe video using Gladia API.
         
-        Note: This is a simplified implementation.
-        Real implementation would need to download audio, upload to Gladia, etc.
+        Sends YouTube URL directly to Gladia (no download needed).
         """
-        # TODO: Implement Gladia transcription
-        # Steps would be:
-        # 1. Get video URL
-        # 2. Download audio (using yt-dlp or similar)
-        # 3. Upload to Gladia
-        # 4. Wait for transcription
-        # 5. Return text
+        if not GLADIA_AVAILABLE:
+            raise ImportError("requests library required for Gladia. Install with: pip install requests")
         
-        logger.warning("Gladia transcription not yet implemented")
-        raise NotImplementedError("Gladia transcription coming soon")
+        logger.info(f"Transcribing {video_id} with Gladia...")
+        
+        # Step 1: Get YouTube video URL
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        
+        # Step 2: Send directly to Gladia (no download needed!)
+        result_url = self._request_gladia_transcription(video_url)
+        
+        # Step 3: Poll for completion
+        transcript_data = self._poll_gladia_result(result_url)
+        
+        # Step 4: Extract text
+        transcript_text = self._extract_transcript_text(transcript_data)
+        
+        logger.info(f"Successfully transcribed {video_id} ({len(transcript_text)} chars)")
+        return transcript_text
+    
+    def _request_gladia_transcription(self, audio_url: str) -> str:
+        """Request transcription from Gladia using /v2/pre-recorded endpoint.
+        
+        Args:
+            audio_url: YouTube video URL (Gladia will handle extraction)
+            
+        Returns:
+            Result URL to poll for completion
+        """
+        import requests
+        
+        headers = {
+            'x-gladia-key': self.gladia_api_key,
+            'Content-Type': 'application/json',
+        }
+        
+        payload = {
+            'audio_url': audio_url,
+            'diarization': False,     # Don't need speaker separation
+            'subtitles': False,       # Just need text
+            'detect_language': True,  # Auto-detect language
+        }
+        
+        logger.info(f"Requesting transcription from Gladia for: {audio_url}")
+        
+        response = requests.post(
+            'https://api.gladia.io/v2/pre-recorded',
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+        
+        response.raise_for_status()
+        data = response.json()
+        
+        result_url = data.get('result_url')
+        transcription_id = data.get('id')
+        
+        if not result_url:
+            raise ValueError(f"No result_url in Gladia response: {data}")
+        
+        logger.info(f"Transcription requested (ID: {transcription_id}). Result URL: {result_url}")
+        return result_url
+    
+    def _poll_gladia_result(self, result_url: str, max_wait: int = 600) -> dict:
+        """Poll Gladia for transcription result.
+        
+        Args:
+            result_url: URL to poll
+            max_wait: Maximum seconds to wait
+            
+        Returns:
+            Transcription result data
+        """
+        import requests
+        
+        headers = {
+            'x-gladia-key': self.gladia_api_key,
+        }
+        
+        start_time = time.time()
+        poll_interval = 5  # seconds
+        
+        logger.info("Waiting for Gladia transcription to complete...")
+        
+        while time.time() - start_time < max_wait:
+            response = requests.get(result_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            status = data.get('status')
+            
+            if status == 'done':
+                logger.info("Transcription complete!")
+                return data
+            elif status == 'error':
+                error_msg = data.get('error', 'Unknown error')
+                raise RuntimeError(f"Gladia transcription failed: {error_msg}")
+            else:
+                # Still processing
+                elapsed = int(time.time() - start_time)
+                logger.info(f"  Status: {status} (elapsed: {elapsed}s)")
+                time.sleep(poll_interval)
+        
+        raise TimeoutError(f"Gladia transcription timed out after {max_wait}s")
+    
+    def _extract_transcript_text(self, transcript_data: dict) -> str:
+        """Extract plain text from Gladia transcription result.
+        
+        Args:
+            transcript_data: Full Gladia response
+            
+        Returns:
+            Plain text transcript
+        """
+        result = transcript_data.get('result', {})
+        transcription = result.get('transcription', {})
+        
+        # Try full_transcript first
+        if 'full_transcript' in transcription:
+            return transcription['full_transcript']
+        
+        # Fall back to utterances
+        utterances = transcription.get('utterances', [])
+        if utterances:
+            return ' '.join([utt.get('text', '') for utt in utterances])
+        
+        # Last resort: check for 'text' field
+        if 'text' in transcription:
+            return transcription['text']
+        
+        raise ValueError(f"Could not extract transcript text from Gladia response: {transcript_data}")
     
     def get_channel_data(
         self,

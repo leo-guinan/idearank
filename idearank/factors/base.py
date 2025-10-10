@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from idearank.models import Video, Channel
+from idearank.models import ContentItem, ContentSource
 
 
 @dataclass
@@ -32,7 +32,7 @@ class FactorResult:
 class BaseFactor(ABC):
     """Abstract base class for all IdeaRank factors.
     
-    Each factor implements a compute() method that takes a video and context,
+    Each factor implements a compute() method that takes a content item and context,
     returning a FactorResult with score and debugging info.
     """
     
@@ -43,15 +43,15 @@ class BaseFactor(ABC):
     @abstractmethod
     def compute(
         self, 
-        video: Video, 
-        channel: Channel,
+        content_item: ContentItem, 
+        content_source: ContentSource,
         context: Optional[dict[str, Any]] = None
     ) -> FactorResult:
-        """Compute the factor score for a video.
+        """Compute the factor score for a content item.
         
         Args:
-            video: The video to score
-            channel: The channel containing the video
+            content_item: The content item to score
+            content_source: The source containing the content item
             context: Optional context (neighborhoods, analytics, etc.)
             
         Returns:

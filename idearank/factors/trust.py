@@ -1,6 +1,6 @@
 """Trust (T) factor: Proof that claims are grounded.
 
-T(v,t) = λ1·1_citations + λ2·source_diversity + λ3·(1 - corrections)
+T(item,t) = λ1·1_citations + λ2·source_diversity + λ3·(1 - corrections)
 
 Scaled to [0,1]. Ties to the broader trust machine.
 
@@ -8,10 +8,13 @@ Higher score = more verifiable and reliable content.
 """
 
 from typing import Any, Optional
+import logging
 
 from idearank.factors.base import BaseFactor, FactorResult
-from idearank.models import Video, Channel
+from idearank.models import ContentItem, ContentSource
 from idearank.config import TrustConfig
+
+logger = logging.getLogger(__name__)
 
 
 class TrustFactor(BaseFactor):
@@ -27,29 +30,64 @@ class TrustFactor(BaseFactor):
     
     def compute(
         self, 
-        video: Video, 
-        channel: Channel,
+        content_item: ContentItem, 
+        content_source: ContentSource,
         context: Optional[dict[str, Any]] = None
     ) -> FactorResult:
-        """Compute trust score.
+        """Compute trust score using entity-idea attribution analysis.
         
         Context can contain:
-            - 'total_videos': int, for computing correction rate across channel
+            - 'total_items': int, for computing correction rate across source
+            - 'use_citation_parser': bool, enable enhanced parsing
+            - 'validate_citations': bool, enable AI validation
         """
         context = context or {}
         
-        # Citation indicator (binary: 0 or 1)
-        has_citations = 1.0 if video.has_citations else 0.0
+        # Try to use citation parser for enhanced trust scoring
+        use_parser = context.get('use_citation_parser', True)
         
-        # Source diversity (already scaled [0, 1])
-        source_diversity = video.source_diversity_score
+        if use_parser:
+            try:
+                from idearank.citation_parser import analyze_citations
+                
+                # Analyze citations in content
+                analysis = analyze_citations(
+                    text=content_item.full_text,
+                    use_spacy=True,
+                    validate=context.get('validate_citations', False),
+                    openai_api_key=context.get('openai_api_key'),
+                    max_validations=3,  # Limit API costs
+                )
+                
+                # Use enhanced trust score
+                citation_quality = min(1.0, analysis.attribution_density / 5.0)
+                entity_diversity = min(1.0, analysis.unique_entities / 10.0)
+                
+                # Apply validation multiplier if available
+                if analysis.validation_accuracy is not None:
+                    citation_quality *= (0.5 + 0.5 * analysis.validation_accuracy)
+                
+                has_citations = citation_quality
+                source_diversity = entity_diversity
+                
+            except Exception as e:
+                logger.warning(f"Citation parser failed, using legacy scoring: {e}")
+                # Fall back to legacy
+                has_citations = 1.0 if content_item.has_citations else 0.0
+                source_diversity = content_item.source_diversity_score
+        else:
+            # Legacy scoring from content metadata
+            has_citations = 1.0 if content_item.has_citations else 0.0
+            source_diversity = content_item.source_diversity_score
+        
+        # Ensure source_diversity is bounded
         source_diversity = max(0.0, min(1.0, source_diversity))
         
         # Correction penalty
-        # Compute as fraction of channel videos that needed corrections
-        total_videos = context.get('total_videos', len(channel.videos))
-        if total_videos > 0:
-            correction_rate = sum(v.correction_count > 0 for v in channel.videos) / total_videos
+        # Compute as fraction of source items that needed corrections
+        total_items = context.get('total_items', len(content_source.content_items))
+        if total_items > 0:
+            correction_rate = sum(item.correction_count > 0 for item in content_source.content_items) / total_items
         else:
             correction_rate = 0.0
         
@@ -73,7 +111,7 @@ class TrustFactor(BaseFactor):
             score=trust,
             components={
                 'has_citations': has_citations,
-                'citation_count': video.citation_count,
+                'citation_count': content_item.citation_count,
                 'source_diversity': source_diversity,
                 'correction_rate': correction_rate,
                 'correction_factor': correction_factor,

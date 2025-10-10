@@ -28,16 +28,16 @@ except ImportError:
 if SQLALCHEMY_AVAILABLE:
     Base = declarative_base()
     
-    class VideoRecord(Base):
-        """Video metadata and analytics."""
-        __tablename__ = 'videos'
+    class ContentItemRecord(Base):
+        """Content item metadata and analytics."""
+        __tablename__ = 'content_items'
         
-        id = Column(String, primary_key=True)  # video_id
-        channel_id = Column(String, index=True)
+        id = Column(String, primary_key=True)  # content_item_id
+        content_source_id = Column(String, index=True)
         title = Column(String)
         description = Column(Text)
-        transcript = Column(Text, nullable=True)
-        transcript_source = Column(String)  # "youtube", "gladia", "none"
+        body = Column(Text, nullable=True)  # Main content (transcript, post text, tweet, etc.)
+        body_source = Column(String)  # "youtube", "gladia", "ghost", "twitter", "none"
         
         published_at = Column(DateTime)
         fetched_at = Column(DateTime, default=datetime.utcnow)
@@ -46,7 +46,7 @@ if SQLALCHEMY_AVAILABLE:
         view_count = Column(Integer)
         like_count = Column(Integer, default=0)
         comment_count = Column(Integer, default=0)
-        duration_seconds = Column(Integer)
+        duration_seconds = Column(Integer)  # For videos/audio content
         
         # Computed impressions (estimate: views * 5)
         impression_count = Column(Integer)
@@ -62,11 +62,11 @@ if SQLALCHEMY_AVAILABLE:
         # Tags as JSON
         tags = Column(JSON)
     
-    class ChannelRecord(Base):
-        """Channel metadata."""
-        __tablename__ = 'channels'
+    class ContentSourceRecord(Base):
+        """Content source metadata."""
+        __tablename__ = 'content_sources'
         
-        id = Column(String, primary_key=True)  # channel_id
+        id = Column(String, primary_key=True)  # content_source_id
         name = Column(String)
         description = Column(Text)
         created_at = Column(DateTime, default=datetime.utcnow)
@@ -75,12 +75,12 @@ if SQLALCHEMY_AVAILABLE:
         total_views = Column(Integer, default=0)
     
     class IdeaRankScoreRecord(Base):
-        """IdeaRank scores for videos."""
+        """IdeaRank scores for content items."""
         __tablename__ = 'idearank_scores'
         
         id = Column(Integer, primary_key=True, autoincrement=True)
-        video_id = Column(String, index=True)
-        channel_id = Column(String, index=True)
+        content_item_id = Column(String, index=True)
+        content_source_id = Column(String, index=True)
         
         computed_at = Column(DateTime, default=datetime.utcnow)
         
@@ -105,20 +105,20 @@ if SQLALCHEMY_AVAILABLE:
         # Configuration used
         weights = Column(JSON)
     
-    class ChannelRankScoreRecord(Base):
-        """Channel-level IdeaRank scores."""
-        __tablename__ = 'channel_rank_scores'
+    class ContentSourceRankScoreRecord(Base):
+        """Content source-level IdeaRank scores."""
+        __tablename__ = 'content_source_rank_scores'
         
         id = Column(Integer, primary_key=True, autoincrement=True)
-        channel_id = Column(String, index=True)
+        content_source_id = Column(String, index=True)
         
         computed_at = Column(DateTime, default=datetime.utcnow)
         
         score = Column(Float)
-        mean_video_score = Column(Float)
+        mean_content_score = Column(Float)
         aul_bonus = Column(Float)
         
-        video_count = Column(Integer)
+        content_count = Column(Integer)
         window_days = Column(Integer)
         crystallization_detected = Column(Boolean)
 
@@ -147,89 +147,105 @@ class SQLiteStorage:
         
         logger.info(f"Initialized SQLite storage at {db_path}")
     
-    def save_video(self, video_data: Any, youtube_data: Optional[Any] = None) -> None:
-        """Save video to database.
+    def get_content_body(self, content_item_id: str) -> Optional[tuple[str, str]]:
+        """Get cached content body from database.
+        
+        Returns:
+            (body_text, source) or None if not found
+        """
+        if not SQLALCHEMY_AVAILABLE:
+            return None
+        
+        record = self.session.query(ContentItemRecord).filter_by(id=content_item_id).first()
+        if record and record.body:
+            logger.info(f"Found cached content for {content_item_id} (source: {record.body_source})")
+            return record.body, record.body_source
+        
+        return None
+    
+    def save_content_item(self, content_item_data: Any, source_data: Optional[Any] = None) -> None:
+        """Save content item to database.
         
         Args:
-            video_data: Video object from idearank.models
-            youtube_data: Optional YouTubeVideoData for additional info
+            content_item_data: ContentItem object from idearank.models
+            source_data: Optional source-specific data for additional info
         """
-        # Check if video already exists
-        existing = self.session.query(VideoRecord).filter_by(id=video_data.id).first()
+        # Check if content item already exists
+        existing = self.session.query(ContentItemRecord).filter_by(id=content_item_data.id).first()
         
         if existing:
             # Update existing record
-            existing.title = video_data.title
-            existing.description = video_data.description
-            existing.transcript = video_data.transcript
-            existing.view_count = video_data.view_count
-            existing.like_count = getattr(video_data, 'like_count', 0)
-            existing.comment_count = getattr(video_data, 'comment_count', 0)
+            existing.title = content_item_data.title
+            existing.description = content_item_data.description
+            existing.body = content_item_data.body
+            existing.view_count = content_item_data.view_count
+            existing.like_count = getattr(content_item_data, 'like_count', 0)
+            existing.comment_count = getattr(content_item_data, 'comment_count', 0)
             existing.fetched_at = datetime.utcnow()
         else:
             # Create new record
-            record = VideoRecord(
-                id=video_data.id,
-                channel_id=video_data.channel_id,
-                title=video_data.title,
-                description=video_data.description,
-                transcript=video_data.transcript or "",
-                transcript_source=getattr(youtube_data, 'transcript_source', 'none') if youtube_data else 'none',
-                published_at=video_data.published_at,
-                view_count=video_data.view_count,
-                like_count=getattr(video_data, 'like_count', 0),
-                comment_count=getattr(video_data, 'comment_count', 0),
-                duration_seconds=int(video_data.video_duration),
-                impression_count=video_data.impression_count,
-                watch_time_seconds=video_data.watch_time_seconds,
-                avg_view_duration=video_data.avg_view_duration,
-                has_citations=video_data.has_citations,
-                citation_count=video_data.citation_count,
-                source_diversity_score=video_data.source_diversity_score,
-                correction_count=video_data.correction_count,
-                tags=video_data.tags,
+            record = ContentItemRecord(
+                id=content_item_data.id,
+                content_source_id=content_item_data.content_source_id,
+                title=content_item_data.title,
+                description=content_item_data.description,
+                body=content_item_data.body or "",
+                body_source=getattr(source_data, 'body_source', 'none') if source_data else 'none',
+                published_at=content_item_data.published_at,
+                view_count=content_item_data.view_count,
+                like_count=getattr(content_item_data, 'like_count', 0),
+                comment_count=getattr(content_item_data, 'comment_count', 0),
+                duration_seconds=int(content_item_data.content_duration),
+                impression_count=content_item_data.impression_count,
+                watch_time_seconds=content_item_data.watch_time_seconds,
+                avg_view_duration=content_item_data.avg_view_duration,
+                has_citations=content_item_data.has_citations,
+                citation_count=content_item_data.citation_count,
+                source_diversity_score=content_item_data.source_diversity_score,
+                correction_count=content_item_data.correction_count,
+                tags=content_item_data.tags,
             )
             self.session.add(record)
         
         self.session.commit()
-        logger.debug(f"Saved video: {video_data.id}")
+        logger.debug(f"Saved content item: {content_item_data.id}")
     
-    def save_channel(self, channel: Any) -> None:
-        """Save channel to database."""
-        existing = self.session.query(ChannelRecord).filter_by(id=channel.id).first()
+    def save_content_source(self, content_source: Any) -> None:
+        """Save content source to database."""
+        existing = self.session.query(ContentSourceRecord).filter_by(id=content_source.id).first()
         
         if existing:
-            existing.name = channel.name
-            existing.description = channel.description
+            existing.name = content_source.name
+            existing.description = content_source.description
         else:
-            record = ChannelRecord(
-                id=channel.id,
-                name=channel.name,
-                description=channel.description,
-                subscriber_count=channel.subscriber_count,
-                total_views=channel.total_views,
+            record = ContentSourceRecord(
+                id=content_source.id,
+                name=content_source.name,
+                description=content_source.description,
+                subscriber_count=content_source.subscriber_count,
+                total_views=content_source.total_views,
             )
             self.session.add(record)
         
         self.session.commit()
-        logger.debug(f"Saved channel: {channel.id}")
+        logger.debug(f"Saved content source: {content_source.id}")
     
-    def save_video_score(
+    def save_content_score(
         self,
-        video_id: str,
-        channel_id: str,
+        content_item_id: str,
+        content_source_id: str,
         score_result: Any,
     ) -> None:
-        """Save IdeaRank score for a video.
+        """Save IdeaRank score for a content item.
         
         Args:
-            video_id: Video ID
-            channel_id: Channel ID
+            content_item_id: Content item ID
+            content_source_id: Content source ID
             score_result: IdeaRankScore object
         """
         record = IdeaRankScoreRecord(
-            video_id=video_id,
-            channel_id=channel_id,
+            content_item_id=content_item_id,
+            content_source_id=content_source_id,
             score=score_result.score,
             passes_gates=score_result.passes_gates,
             uniqueness_score=score_result.uniqueness.score,
@@ -247,41 +263,41 @@ class SQLiteStorage:
         
         self.session.add(record)
         self.session.commit()
-        logger.debug(f"Saved IdeaRank score for video: {video_id}")
+        logger.debug(f"Saved IdeaRank score for content item: {content_item_id}")
     
-    def save_channel_score(
+    def save_source_score(
         self,
-        channel_id: str,
+        content_source_id: str,
         score_result: Any,
     ) -> None:
-        """Save channel-level score."""
-        record = ChannelRankScoreRecord(
-            channel_id=channel_id,
+        """Save content source-level score."""
+        record = ContentSourceRankScoreRecord(
+            content_source_id=content_source_id,
             score=score_result.score,
-            mean_video_score=score_result.mean_video_score,
+            mean_content_score=score_result.mean_content_score,
             aul_bonus=score_result.aul_bonus,
-            video_count=score_result.video_count,
+            content_count=score_result.content_count,
             window_days=score_result.window_days,
             crystallization_detected=score_result.crystallization_detected,
         )
         
         self.session.add(record)
         self.session.commit()
-        logger.debug(f"Saved channel score for: {channel_id}")
+        logger.debug(f"Saved content source score for: {content_source_id}")
     
-    def get_video(self, video_id: str) -> Optional[VideoRecord]:
-        """Get video by ID."""
-        return self.session.query(VideoRecord).filter_by(id=video_id).first()
+    def get_content_item(self, content_item_id: str) -> Optional[ContentItemRecord]:
+        """Get content item by ID."""
+        return self.session.query(ContentItemRecord).filter_by(id=content_item_id).first()
     
-    def get_channel_videos(self, channel_id: str) -> List[VideoRecord]:
-        """Get all videos for a channel."""
-        return self.session.query(VideoRecord).filter_by(channel_id=channel_id).all()
+    def get_source_content_items(self, content_source_id: str) -> List[ContentItemRecord]:
+        """Get all content items for a source."""
+        return self.session.query(ContentItemRecord).filter_by(content_source_id=content_source_id).all()
     
-    def get_latest_scores(self, channel_id: str, limit: int = 10) -> List[IdeaRankScoreRecord]:
-        """Get latest IdeaRank scores for a channel."""
+    def get_latest_scores(self, content_source_id: str, limit: int = 10) -> List[IdeaRankScoreRecord]:
+        """Get latest IdeaRank scores for a content source."""
         return (
             self.session.query(IdeaRankScoreRecord)
-            .filter_by(channel_id=channel_id)
+            .filter_by(content_source_id=content_source_id)
             .order_by(IdeaRankScoreRecord.computed_at.desc())
             .limit(limit)
             .all()

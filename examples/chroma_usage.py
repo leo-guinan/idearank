@@ -9,7 +9,7 @@ This example shows how to:
 from datetime import datetime, timedelta
 import os
 
-from idearank import IdeaRankConfig, Video, Channel
+from idearank import IdeaRankConfig, ContentItem, ContentSource
 from idearank.pipeline import IdeaRankPipeline
 from idearank.providers import DummyTopicModelProvider
 
@@ -24,9 +24,9 @@ except ImportError:
     exit(1)
 
 
-def create_sample_videos(channel_id: str, count: int = 10) -> list[Video]:
-    """Create sample videos for testing."""
-    videos = []
+def create_sample_content(source_id: str, count: int = 10) -> list[ContentItem]:
+    """Create sample content items for testing."""
+    content_items = []
     base_time = datetime(2024, 1, 1)
     
     topics = [
@@ -44,28 +44,28 @@ def create_sample_videos(channel_id: str, count: int = 10) -> list[Video]:
     
     for i in range(count):
         topic = topics[i % len(topics)]
-        video = Video(
-            id=f"{channel_id}_video_{i}",
-            channel_id=channel_id,
-            title=f"Video {i}: {topic.title()}",
+        item = ContentItem(
+            id=f"{source_id}_item_{i}",
+            content_source_id=source_id,
+            title=f"Content {i}: {topic.title()}",
             description=f"A comprehensive guide to {topic}. " * 5,
-            transcript=f"In this video, we explore {topic} in depth. " * 20,
+            body=f"In this content, we explore {topic} in depth. " * 20,
             published_at=base_time + timedelta(days=i * 14),
-            snapshot_time=datetime.now(),
+            captured_at=datetime.now(),
             # Analytics
             view_count=1000 * (i + 1),
             impression_count=5000 * (i + 1),
             watch_time_seconds=float(800 * (i + 1) * 180),
             avg_view_duration=180.0 + i * 20,
-            video_duration=600.0,
+            content_duration=600.0,
             # Trust signals
             has_citations=i % 2 == 0,
             citation_count=i * 3,
             source_diversity_score=0.6 + (i * 0.04),
         )
-        videos.append(video)
+        content_items.append(item)
     
-    return videos
+    return content_items
 
 
 def main():
@@ -114,78 +114,78 @@ def main():
     )
     
     # Create sample data
-    print("\n4. Creating sample channels and videos...")
-    channels = []
+    print("\n4. Creating sample content sources and items...")
+    content_sources = []
     
     for i in range(2):
-        channel = Channel(
-            id=f"ml_channel_{i}",
-            name=f"ML Education Channel {i}",
+        source = ContentSource(
+            id=f"ml_source_{i}",
+            name=f"ML Education Source {i}",
             description=f"Educational content about machine learning",
             created_at=datetime(2023, 1, 1),
-            videos=create_sample_videos(f"ml_channel_{i}", count=10),
+            content_items=create_sample_content(f"ml_source_{i}", count=10),
         )
-        channels.append(channel)
+        content_sources.append(source)
     
-    total_videos = sum(len(c.videos) for c in channels)
-    print(f"   Created {len(channels)} channels with {total_videos} videos")
+    total_items = sum(len(source.content_items) for source in content_sources)
+    print(f"   Created {len(content_sources)} sources with {total_items} items")
     
-    # Process videos (generate embeddings)
+    # Process content (generate embeddings)
     print("\n5. Generating embeddings with Chroma...")
-    all_videos = [v for c in channels for v in c.videos]
-    pipeline.process_videos_batch(all_videos)
-    print(f"   ✓ Generated {total_videos} embeddings")
+    all_items = [item for source in content_sources for item in source.content_items]
+    pipeline.process_content_batch(all_items)
+    print(f"   ✓ Generated {total_items} embeddings")
     
-    # Index videos in Chroma
-    print("\n6. Indexing videos in Chroma Cloud...")
-    pipeline.index_videos(all_videos)
-    print(f"   ✓ Indexed {total_videos} videos")
+    # Index content in Chroma
+    print("\n6. Indexing content in Chroma Cloud...")
+    pipeline.index_content(all_items)
+    print(f"   ✓ Indexed {total_items} items")
     
-    # Score a single video
-    print("\n7. Scoring a video with Chroma-powered search...")
-    test_video = channels[0].videos[5]
-    test_channel = channels[0]
+    # Score a single content item
+    print("\n7. Scoring content with Chroma-powered search...")
+    test_item = content_sources[0].content_items[5]
+    test_source = content_sources[0]
     
-    video_score = pipeline.score_video(test_video, test_channel)
+    item_score = pipeline.score_content_item(test_item, test_source)
     
-    print(f"\n   Video: {test_video.title}")
-    print(f"   Overall IdeaRank Score: {video_score.score:.4f}")
+    print(f"\n   Content: {test_item.title}")
+    print(f"   Overall IdeaRank Score: {item_score.score:.4f}")
     print(f"\n   Factor Breakdown:")
-    print(f"     - Uniqueness (U):  {video_score.uniqueness.score:.4f}")
+    print(f"     - Uniqueness (U):  {item_score.uniqueness.score:.4f}")
     print(f"       → Mean similarity to global corpus: "
-          f"{video_score.uniqueness.components['mean_similarity']:.4f}")
-    print(f"     - Cohesion (C):    {video_score.cohesion.score:.4f}")
-    print(f"     - Learning (L):    {video_score.learning.score:.4f}")
-    print(f"     - Quality (Q):     {video_score.quality.score:.4f}")
-    print(f"     - Trust (T):       {video_score.trust.score:.4f}")
+          f"{item_score.uniqueness.components['mean_similarity']:.4f}")
+    print(f"     - Cohesion (C):    {item_score.cohesion.score:.4f}")
+    print(f"     - Learning (L):    {item_score.learning.score:.4f}")
+    print(f"     - Quality (Q):     {item_score.quality.score:.4f}")
+    print(f"     - Trust (T):       {item_score.trust.score:.4f}")
     
-    # Score all channels
-    print("\n8. Scoring channels...")
-    for channel in channels:
-        channel_score = pipeline.score_channel(channel)
-        print(f"\n   {channel.name}:")
-        print(f"     Channel Score: {channel_score.score:.4f}")
-        print(f"     Mean Video Score: {channel_score.mean_video_score:.4f}")
-        print(f"     AUL Bonus: {channel_score.aul_bonus:.4f}")
-        print(f"     Crystallization: {channel_score.crystallization_detected}")
+    # Score all sources
+    print("\n8. Scoring content sources...")
+    for source in content_sources:
+        source_score = pipeline.score_source(source)
+        print(f"\n   {source.name}:")
+        print(f"     Source Score: {source_score.score:.4f}")
+        print(f"     Mean Content Score: {source_score.mean_content_score:.4f}")
+        print(f"     AUL Bonus: {source_score.aul_bonus:.4f}")
+        print(f"     Crystallization: {source_score.crystallization_detected}")
     
     # Compute network scores
-    print("\n9. Computing KnowledgeRank across channels...")
+    print("\n9. Computing KnowledgeRank across sources...")
     config.network.enabled = True
-    kr_scores = pipeline.score_channels_with_network(channels)
+    kr_scores = pipeline.score_sources_with_network(content_sources)
     
-    print("\n   Channel Rankings:")
+    print("\n   Source Rankings:")
     print("   " + "-" * 60)
     
-    sorted_channels = sorted(
+    sorted_sources = sorted(
         kr_scores.items(),
         key=lambda x: x[1].knowledge_rank,
         reverse=True
     )
     
-    for channel_id, kr_score in sorted_channels:
-        channel_name = next(c.name for c in channels if c.id == channel_id)
-        print(f"   {channel_name:25} | KR: {kr_score.knowledge_rank:.4f} | "
+    for source_id, kr_score in sorted_sources:
+        source_name = next(source.name for source in content_sources if source.id == source_id)
+        print(f"   {source_name:25} | KR: {kr_score.knowledge_rank:.4f} | "
               f"IR: {kr_score.idea_rank:.4f}")
     
     print("\n" + "=" * 70)

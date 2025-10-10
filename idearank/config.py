@@ -71,10 +71,10 @@ class TrustConfig:
 
 
 @dataclass
-class ChannelRankConfig:
-    """Configuration for channel-level scoring."""
+class ContentSourceRankConfig:
+    """Configuration for content source-level scoring."""
     
-    window_days: int = 180  # Sliding window for channel videos
+    window_days: int = 180  # Sliding window for source content
     aul_bonus_weight: float = 0.1  # η - weight for Area Under Learning
     crystallization_variance_floor: float = 0.01  # Minimum learning variance
     crystallization_weeks: int = 8  # Weeks of stagnation before decay
@@ -112,7 +112,7 @@ class IdeaRankConfig:
     trust: TrustConfig = field(default_factory=TrustConfig)
     
     # Higher-level configurations
-    channel: ChannelRankConfig = field(default_factory=ChannelRankConfig)
+    content_source: ContentSourceRankConfig = field(default_factory=ContentSourceRankConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     
     # Global settings

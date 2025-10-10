@@ -1,13 +1,13 @@
 """Main IdeaRank scoring engine.
 
-Combines all factors (U, C, L, Q, T) to produce video and channel scores.
+Combines all factors (U, C, L, Q, T) to produce content item and content source scores.
 """
 
 from dataclasses import dataclass
 from typing import Any, Optional
 import numpy as np
 
-from idearank.models import Video, Channel
+from idearank.models import ContentItem, ContentSource
 from idearank.config import IdeaRankConfig
 from idearank.factors import (
     UniquenessFactor,
@@ -21,10 +21,10 @@ from idearank.factors import (
 
 @dataclass
 class IdeaRankScore:
-    """Result of IdeaRank computation for a single video."""
+    """Result of IdeaRank computation for a single content item."""
     
-    video_id: str
-    score: float  # Final IR(v,t)
+    content_item_id: str
+    score: float  # Final IR(item,t)
     
     # Individual factor scores
     uniqueness: FactorResult
@@ -40,7 +40,7 @@ class IdeaRankScore:
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
-            'video_id': self.video_id,
+            'content_item_id': self.content_item_id,
             'score': self.score,
             'factors': {
                 'uniqueness': {
@@ -70,9 +70,9 @@ class IdeaRankScore:
 
 
 class IdeaRankScorer:
-    """Computes IdeaRank scores for videos.
+    """Computes IdeaRank scores for content items.
     
-    IR(v,t) = U^w_U · C^w_C · L^w_L · Q^w_Q · T^w_T
+    IR(item,t) = U^w_U · C^w_C · L^w_L · Q^w_Q · T^w_T
     """
     
     def __init__(self, config: IdeaRankConfig):
@@ -87,17 +87,17 @@ class IdeaRankScorer:
         self.quality_factor = QualityFactor(config.quality)
         self.trust_factor = TrustFactor(config.trust)
     
-    def score_video(
+    def score_content(
         self,
-        video: Video,
-        channel: Channel,
+        content_item: ContentItem,
+        content_source: ContentSource,
         context: Optional[dict[str, Any]] = None,
     ) -> IdeaRankScore:
-        """Compute IdeaRank score for a video.
+        """Compute IdeaRank score for a content item.
         
         Args:
-            video: The video to score
-            channel: The channel containing the video
+            content_item: The content item to score
+            content_source: The source containing the content item
             context: Context dict containing neighborhoods, analytics, etc.
             
         Returns:
@@ -106,11 +106,11 @@ class IdeaRankScorer:
         context = context or {}
         
         # Compute each factor
-        uniqueness = self.uniqueness_factor.compute(video, channel, context)
-        cohesion = self.cohesion_factor.compute(video, channel, context)
-        learning = self.learning_factor.compute(video, channel, context)
-        quality = self.quality_factor.compute(video, channel, context)
-        trust = self.trust_factor.compute(video, channel, context)
+        uniqueness = self.uniqueness_factor.compute(content_item, content_source, context)
+        cohesion = self.cohesion_factor.compute(content_item, content_source, context)
+        learning = self.learning_factor.compute(content_item, content_source, context)
+        quality = self.quality_factor.compute(content_item, content_source, context)
+        trust = self.trust_factor.compute(content_item, content_source, context)
         
         # Check gates
         passes_u_gate = uniqueness.score >= self.config.uniqueness.min_threshold
@@ -136,7 +136,7 @@ class IdeaRankScorer:
             pass
         
         return IdeaRankScore(
-            video_id=video.id,
+            content_item_id=content_item.id,
             score=ir_score,
             uniqueness=uniqueness,
             cohesion=cohesion,
@@ -155,139 +155,139 @@ class IdeaRankScorer:
 
 
 @dataclass
-class ChannelRankScore:
-    """Result of channel-level IdeaRank computation."""
+class ContentSourceRankScore:
+    """Result of content source-level IdeaRank computation."""
     
-    channel_id: str
+    content_source_id: str
     score: float  # IR_S(t)
     
     # Components
-    mean_video_score: float
+    mean_content_score: float
     aul_bonus: float  # Area Under Learning bonus
     
     # Metadata
-    video_count: int
+    content_count: int
     window_days: int
     crystallization_detected: bool
     
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
-            'channel_id': self.channel_id,
+            'content_source_id': self.content_source_id,
             'score': self.score,
-            'mean_video_score': self.mean_video_score,
+            'mean_content_score': self.mean_content_score,
             'aul_bonus': self.aul_bonus,
-            'video_count': self.video_count,
+            'content_count': self.content_count,
             'window_days': self.window_days,
             'crystallization_detected': self.crystallization_detected,
         }
 
 
-class ChannelScorer:
-    """Computes channel-level IdeaRank scores.
+class ContentSourceScorer:
+    """Computes content source-level IdeaRank scores.
     
-    IR_S(t) = mean(IR(v,t)) + η·AUL(t)
+    IR_S(t) = mean(IR(item,t)) + η·AUL(t)
     
     with anti-crystallization penalties.
     """
     
     def __init__(self, config: IdeaRankConfig):
-        """Initialize channel scorer."""
+        """Initialize content source scorer."""
         self.config = config
-        self.video_scorer = IdeaRankScorer(config)
+        self.content_scorer = IdeaRankScorer(config)
     
-    def score_channel(
+    def score_source(
         self,
-        channel: Channel,
+        content_source: ContentSource,
         end_time: Optional[Any] = None,  # datetime
-        video_scores: Optional[dict[str, IdeaRankScore]] = None,
-    ) -> ChannelRankScore:
-        """Compute channel-level IdeaRank score.
+        content_scores: Optional[dict[str, IdeaRankScore]] = None,
+    ) -> ContentSourceRankScore:
+        """Compute content source-level IdeaRank score.
         
         Args:
-            channel: The channel to score
-            end_time: End of evaluation window (defaults to most recent video)
-            video_scores: Pre-computed video scores (optional, will compute if not provided)
+            content_source: The content source to score
+            end_time: End of evaluation window (defaults to most recent content)
+            content_scores: Pre-computed content scores (optional, will compute if not provided)
             
         Returns:
-            ChannelRankScore with aggregate metrics
+            ContentSourceRankScore with aggregate metrics
         """
         # Determine time window
         if end_time is None:
-            if channel.videos:
-                end_time = max(v.published_at for v in channel.videos)
+            if content_source.content_items:
+                end_time = max(item.published_at for item in content_source.content_items)
             else:
-                raise ValueError("Channel has no videos and no end_time provided")
+                raise ValueError("Content source has no items and no end_time provided")
         
-        # Get videos in window
-        videos_in_window = channel.get_videos_in_window(
+        # Get content in window
+        items_in_window = content_source.get_content_in_window(
             end_time,
-            window_days=self.config.channel.window_days
+            window_days=self.config.content_source.window_days
         )
         
-        if not videos_in_window:
-            # No videos in window - return neutral score
-            return ChannelRankScore(
-                channel_id=channel.id,
+        if not items_in_window:
+            # No content in window - return neutral score
+            return ContentSourceRankScore(
+                content_source_id=content_source.id,
                 score=0.0,
-                mean_video_score=0.0,
+                mean_content_score=0.0,
                 aul_bonus=0.0,
-                video_count=0,
-                window_days=self.config.channel.window_days,
+                content_count=0,
+                window_days=self.config.content_source.window_days,
                 crystallization_detected=False,
             )
         
-        # Compute or retrieve video scores
-        if video_scores is None:
-            video_scores = {}
-            for video in videos_in_window:
+        # Compute or retrieve content scores
+        if content_scores is None:
+            content_scores = {}
+            for item in items_in_window:
                 # This would need context in practice
                 # For now, placeholder
-                score = self.video_scorer.score_video(video, channel, {})
-                video_scores[video.id] = score
+                score = self.content_scorer.score_content(item, content_source, {})
+                content_scores[item.id] = score
         
-        # Calculate mean video score
-        scores = [video_scores[v.id].score for v in videos_in_window if v.id in video_scores]
+        # Calculate mean content score
+        scores = [content_scores[item.id].score for item in items_in_window if item.id in content_scores]
         mean_score = float(np.mean(scores)) if scores else 0.0
         
         # Calculate Area Under Learning (AUL)
-        aul = self._compute_aul(videos_in_window, video_scores)
+        aul = self._compute_aul(items_in_window, content_scores)
         
         # Check for crystallization
-        crystallization_detected = self._detect_crystallization(videos_in_window, video_scores)
+        crystallization_detected = self._detect_crystallization(items_in_window, content_scores)
         
-        # Compute final channel score
-        channel_score = mean_score + self.config.channel.aul_bonus_weight * aul
+        # Compute final source score
+        source_score = mean_score + self.config.content_source.aul_bonus_weight * aul
         
         # Apply crystallization penalty if detected
         if crystallization_detected:
-            channel_score *= self.config.channel.crystallization_decay
+            source_score *= self.config.content_source.crystallization_decay
         
-        return ChannelRankScore(
-            channel_id=channel.id,
-            score=channel_score,
-            mean_video_score=mean_score,
+        return ContentSourceRankScore(
+            content_source_id=content_source.id,
+            score=source_score,
+            mean_content_score=mean_score,
             aul_bonus=aul,
-            video_count=len(videos_in_window),
-            window_days=self.config.channel.window_days,
+            content_count=len(items_in_window),
+            window_days=self.config.content_source.window_days,
             crystallization_detected=crystallization_detected,
         )
     
     def _compute_aul(
         self,
-        videos: list[Video],
-        video_scores: dict[str, IdeaRankScore],
+        content_items: list[ContentItem],
+        content_scores: dict[str, IdeaRankScore],
     ) -> float:
         """Compute Area Under Learning.
         
-        AUL = Σ max(0, L(v,t) - mean(L))
+        AUL = Σ max(0, L(item,t) - mean(L))
         
         Rewards consistent positive learning progression.
         """
         learning_scores = [
-            video_scores[v.id].learning.score
-            for v in videos
-            if v.id in video_scores
+            content_scores[item.id].learning.score
+            for item in content_items
+            if item.id in content_scores
         ]
         
         if not learning_scores:
@@ -302,18 +302,18 @@ class ChannelScorer:
     
     def _detect_crystallization(
         self,
-        videos: list[Video],
-        video_scores: dict[str, IdeaRankScore],
+        content_items: list[ContentItem],
+        content_scores: dict[str, IdeaRankScore],
     ) -> bool:
-        """Detect if channel has crystallized (stopped learning).
+        """Detect if source has crystallized (stopped learning).
         
         Returns True if variance in Learning scores is below floor
         for the specified number of weeks.
         """
         learning_scores = [
-            video_scores[v.id].learning.score
-            for v in videos
-            if v.id in video_scores
+            content_scores[item.id].learning.score
+            for item in content_items
+            if item.id in content_scores
         ]
         
         if len(learning_scores) < 3:
@@ -321,5 +321,5 @@ class ChannelScorer:
         
         variance = float(np.var(learning_scores))
         
-        return variance < self.config.channel.crystallization_variance_floor
+        return variance < self.config.content_source.crystallization_variance_floor
 

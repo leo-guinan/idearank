@@ -1,6 +1,6 @@
-"""Uniqueness (U) factor: How original is this video vs. the global corpus?
+"""Uniqueness (U) factor: How original is this content vs. the global corpus?
 
-U(v,t) = 1 - (1/|N_v^inter|) * Σ cos(e_v(t), e_n)
+U(item,t) = 1 - (1/|N_item^inter|) * Σ cos(e_item(t), e_n)
 
 Higher score = more semantically novel vs. other content.
 """
@@ -9,12 +9,12 @@ from typing import Any, Optional
 import numpy as np
 
 from idearank.factors.base import BaseFactor, FactorResult
-from idearank.models import Video, Channel, Embedding
+from idearank.models import ContentItem, ContentSource, Embedding
 from idearank.config import UniquenessConfig
 
 
 class UniquenessFactor(BaseFactor):
-    """Computes how unique/novel a video is compared to global content."""
+    """Computes how unique/novel a content item is compared to global content."""
     
     def __init__(self, config: UniquenessConfig):
         super().__init__(config)
@@ -26,14 +26,14 @@ class UniquenessFactor(BaseFactor):
     
     def compute(
         self, 
-        video: Video, 
-        channel: Channel,
+        content_item: ContentItem, 
+        content_source: ContentSource,
         context: Optional[dict[str, Any]] = None
     ) -> FactorResult:
         """Compute uniqueness score.
         
         Context should contain:
-            - 'global_neighbors': list of (Video, similarity) tuples from ANN search
+            - 'global_neighbors': list of (ContentItem, similarity) tuples from ANN search
         """
         if context is None or 'global_neighbors' not in context:
             raise ValueError(
@@ -51,16 +51,16 @@ class UniquenessFactor(BaseFactor):
                 metadata={'warning': 'No global neighbors found'}
             )
         
-        # Extract similarities (assuming neighbors is list of (video, similarity))
+        # Extract similarities (assuming neighbors is list of (content_item, similarity))
         if isinstance(global_neighbors[0], tuple):
             similarities = [sim for _, sim in global_neighbors[:self.config.k_global]]
         else:
             # Fallback: compute similarities if not provided
-            if video.embedding is None:
-                raise ValueError("Video must have embedding for Uniqueness computation")
+            if content_item.embedding is None:
+                raise ValueError("Content item must have embedding for Uniqueness computation")
             
             similarities = [
-                video.embedding.cosine_similarity(neighbor.embedding)
+                content_item.embedding.cosine_similarity(neighbor.embedding)
                 for neighbor in global_neighbors[:self.config.k_global]
                 if neighbor.embedding is not None
             ]

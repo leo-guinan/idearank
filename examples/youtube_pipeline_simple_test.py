@@ -6,7 +6,7 @@ This shows the pipeline structure without requiring YouTube API access.
 import logging
 from datetime import datetime, timedelta
 
-from idearank import IdeaRankConfig, Video, Channel
+from idearank import IdeaRankConfig, ContentItem, ContentSource
 from idearank.pipeline import IdeaRankPipeline
 from idearank.providers import DummyTopicModelProvider
 from idearank.providers import DummyEmbeddingProvider, DummyNeighborhoodProvider
@@ -73,9 +73,9 @@ def create_mock_youtube_data() -> list[YouTubeVideoData]:
     return videos
 
 
-def convert_to_idearank_videos(yt_videos: list[YouTubeVideoData]) -> tuple[list[Video], Channel]:
+def convert_to_idearank_content(yt_videos: list[YouTubeVideoData]) -> tuple[list[ContentItem], ContentSource]:
     """Convert mock YouTube data to IdeaRank format."""
-    videos = []
+    content_items = []
     
     for yt_video in yt_videos:
         # Estimate analytics
@@ -83,36 +83,36 @@ def convert_to_idearank_videos(yt_videos: list[YouTubeVideoData]) -> tuple[list[
         avg_duration_estimate = yt_video.duration_seconds * 0.55  # 55% completion
         watch_time = yt_video.view_count * avg_duration_estimate
         
-        video = Video(
+        item = ContentItem(
             id=yt_video.video_id,
-            channel_id=yt_video.channel_id,
+            content_source_id=yt_video.channel_id,
             title=yt_video.title,
             description=yt_video.description,
-            transcript=yt_video.transcript or "",
+            body=yt_video.transcript or "",
             published_at=yt_video.published_at,
-            snapshot_time=datetime.now(),
+            captured_at=datetime.now(),
             view_count=yt_video.view_count,
             impression_count=impression_count,
             watch_time_seconds=float(watch_time),
             avg_view_duration=float(avg_duration_estimate),
-            video_duration=float(yt_video.duration_seconds),
+            content_duration=float(yt_video.duration_seconds),
             has_citations=False,
             citation_count=0,
             source_diversity_score=0.5,
             correction_count=0,
             tags=yt_video.tags or [],
         )
-        videos.append(video)
+        content_items.append(item)
     
-    channel = Channel(
+    content_source = ContentSource(
         id="UCmock_channel",
         name="Mock Supply Chain Channel",
         description="Educational content about supply chain and logistics",
-        created_at=min(v.published_at for v in videos),
-        videos=videos,
+        created_at=min(item.published_at for item in content_items),
+        content_items=content_items,
     )
     
-    return videos, channel
+    return content_items, content_source
 
 
 def main():
@@ -129,8 +129,8 @@ def main():
     
     # 2. Convert to IdeaRank format
     print("\n[2/5] Converting to IdeaRank format...")
-    videos, channel = convert_to_idearank_videos(yt_videos)
-    print(f"✓ Converted {len(videos)} videos")
+    content_items, content_source = convert_to_idearank_content(yt_videos)
+    print(f"✓ Converted {len(content_items)} videos")
     
     # 3. Initialize providers (using Dummy for this test)
     print("\n[3/5] Setting up providers...")
@@ -152,36 +152,36 @@ def main():
     )
     print("✓ Pipeline ready")
     
-    # 5. Process videos
+    # 5. Process content
     print("\n[5/5] Processing pipeline...")
     
     # Generate embeddings
     print("  - Generating embeddings...")
-    pipeline.process_videos_batch(videos)
+    pipeline.process_content_batch(content_items)
     print("  ✓ Embeddings generated")
     
     # Index in Chroma
-    print("  - Indexing in Chroma...")
-    pipeline.index_videos(videos)
-    print("  ✓ Videos indexed")
+    print("  - Indexing content...")
+    pipeline.index_content(content_items)
+    print("  ✓ Content indexed")
     
-    # Score videos
+    # Score content
     print("  - Computing IdeaRank scores...")
     scores = {}
-    for i, video in enumerate(videos, 1):
-        print(f"    Scoring {i}/{len(videos)}: {video.title[:40]}...")
-        score = pipeline.score_video(video, channel)
-        scores[video.id] = score
+    for i, item in enumerate(content_items, 1):
+        print(f"    Scoring {i}/{len(content_items)}: {item.title[:40]}...")
+        score = pipeline.score_content_item(item, content_source)
+        scores[item.id] = score
     print("  ✓ Scores computed")
     
     # 6. Save to SQLite
     print("\n[6/6] Saving to SQLite...")
     storage = SQLiteStorage(db_path="youtube_test.db")
-    storage.save_channel(channel)
-    for video, yt_data in zip(videos, yt_videos):
-        storage.save_video(video, yt_data)
-    for video_id, score in scores.items():
-        storage.save_video_score(video_id, channel.id, score)
+    storage.save_content_source(content_source)
+    for item, yt_data in zip(content_items, yt_videos):
+        storage.save_content_item(item, yt_data)
+    for item_id, score in scores.items():
+        storage.save_content_score(item_id, content_source.id, score)
     storage.close()
     print("✓ Saved to youtube_test.db")
     
@@ -192,9 +192,9 @@ def main():
     
     sorted_scores = sorted(scores.items(), key=lambda x: x[1].score, reverse=True)
     
-    for i, (video_id, score) in enumerate(sorted_scores, 1):
-        video = next(v for v in videos if v.id == video_id)
-        print(f"\n{i}. {video.title}")
+    for i, (item_id, score) in enumerate(sorted_scores, 1):
+        item = next(item for item in content_items if item.id == item_id)
+        print(f"\n{i}. {item.title}")
         print(f"   IdeaRank: {score.score:.4f} | Gates: {'✓' if score.passes_gates else '✗'}")
         print(f"   U={score.uniqueness.score:.3f} | "
               f"C={score.cohesion.score:.3f} | "

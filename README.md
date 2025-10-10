@@ -1,343 +1,474 @@
 # IdeaRank
 
-**A PageRank replacement for ideas, not links.**
+A multi-factor ranking system for content that measures **uniqueness**, **cohesion**, **learning progression**, **quality**, and **trust** — not just links or popularity.
 
-IdeaRank is a multi-factor ranking algorithm for video content that rewards:
-- **Uniqueness** (U): Semantic originality vs. the global corpus
-- **Cohesion** (C): Fit within the channel's conceptual lattice
-- **Learning** (L): Forward progression, not repetition
-- **Quality** (Q): Genuine engagement, not clickbait
-- **Trust** (T): Verifiable claims and sources
-
-## Formula
-
-```
-IR(v,t) = U^w_U · C^w_C · L^w_L · Q^w_Q · T^w_T
-```
-
-Each factor is independently computed and configurable, making IdeaRank adaptable to different domains and use cases.
-
-## Architecture
-
-IdeaRank is designed for **modularity and experimentation**:
-
-```
-idearank/
-├── models.py           # Core data models (Video, Channel, Embedding)
-├── config.py           # Hyperparameter configuration
-├── factors/            # Independent factor modules
-│   ├── uniqueness.py   # U factor
-│   ├── cohesion.py     # C factor
-│   ├── learning.py     # L factor
-│   ├── quality.py      # Q factor
-│   └── trust.py        # T factor
-├── scorer.py           # Video and channel scoring
-├── network.py          # Optional KnowledgeRank network layer
-├── pipeline.py         # End-to-end orchestration
-└── providers/          # Pluggable implementations
-    ├── embeddings.py   # Embedding providers
-    ├── topics.py       # Topic model providers
-    └── neighborhoods.py # ANN search providers
-```
-
-## Installation
-
-```bash
-# Basic installation
-pip install -e .
-
-# With optional dependencies
-pip install -e ".[chroma]"    # For Chroma Cloud (recommended)
-pip install -e ".[openai]"    # For OpenAI embeddings
-pip install -e ".[faiss]"     # For FAISS ANN search
-pip install -e ".[ml]"        # For scikit-learn topic models
-pip install -e ".[all]"       # Everything
-```
+**Think PageRank, but for ideas.**
 
 ## Quick Start
 
+### Installation
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd idearank
+
+# Install with all features
+pip install -e ".[all]"
+```
+
+### Basic Setup
+
+```bash
+# Set up your API keys
+idearank config set-youtube-key YOUR_YOUTUBE_API_KEY
+idearank config set-gladia-key YOUR_GLADIA_API_KEY  # Optional: for transcription
+
+# Optional: Set up OpenAI for better embeddings
+export OPENAI_API_KEY=your_key_here
+```
+
+### Process Your Content
+
+#### YouTube Channel
+```bash
+idearank process https://youtube.com/@yourchannel --max-videos 50
+```
+
+#### Ghost Blog Export
+```bash
+# Export your Ghost blog (Settings → Labs → Export)
+idearank process-ghost-export ~/Downloads/your-blog.ghost.json --max-posts 50
+```
+
+#### Twitter Archive
+```bash
+# Add your Twitter handle or direct archive URL
+idearank source add @yourhandle twitter
+idearank process-all
+```
+
+#### Process Multiple Sources
+```bash
+# Add sources
+idearank source add https://youtube.com/@channel1 youtube
+idearank source add ~/Downloads/blog.ghost.json ghost-export
+idearank source add @username twitter
+
+# Process everything at once
+idearank process-all
+```
+
+### Visualize Results
+
+```bash
+# Create complete dashboard
+idearank viz dashboard
+
+# Individual plots
+idearank viz timeline              # Scores over time
+idearank viz factors              # Factor breakdown
+idearank viz scatter              # Uniqueness vs Cohesion
+idearank viz learning --source-id SOURCE_ID  # Learning trajectory
+```
+
+## Core Concepts
+
+### The Five Factors
+
+IdeaRank scores content using five factors:
+
+1. **Uniqueness (U)** - How novel is this content vs. everything else?
+2. **Cohesion (C)** - Does it fit the source's theme or is it random?
+3. **Learning (L)** - Is the source advancing ideas, not repeating?
+4. **Quality (Q)** - Genuine engagement (not just clickbait)
+5. **Trust (T)** - Are claims grounded with citations?
+
+**Final Score:** `IR = U^w_U · C^w_C · L^w_L · Q^w_Q · T^w_T`
+
+### Content Sources
+
+IdeaRank supports multiple content types:
+- **YouTube** - Videos with transcripts
+- **Ghost Blogs** - Blog posts (via export or API)
+- **Twitter** - Tweet archives from community-archive.org
+- **More coming** - Easy to add new sources
+
+## Python API
+
+### Basic Usage
+
 ```python
-from datetime import datetime
-from idearank import IdeaRankConfig, Video, Channel
+from idearank import IdeaRankConfig, ContentItem, ContentSource
 from idearank.pipeline import IdeaRankPipeline
 from idearank.providers import (
-    DummyEmbeddingProvider,
-    DummyTopicModelProvider,
+    SentenceTransformerEmbeddingProvider,
+    LDATopicModelProvider,
     DummyNeighborhoodProvider,
 )
 
-# 1. Create configuration
+# Create content items
+items = [
+    ContentItem(
+        id="item_1",
+        content_source_id="my_blog",
+        title="My First Post",
+        description="Introduction to my ideas",
+        body="Full content of the post...",
+        published_at=datetime(2024, 1, 1),
+        captured_at=datetime.now(),
+        view_count=1000,
+        impression_count=5000,
+        watch_time_seconds=50000.0,
+        avg_view_duration=200.0,
+        content_duration=300.0,
+    ),
+    # ... more items
+]
+
+# Create content source
+source = ContentSource(
+    id="my_blog",
+    name="My Blog",
+    description="Personal blog about ideas",
+    created_at=datetime(2023, 1, 1),
+    content_items=items,
+)
+
+# Set up pipeline
 config = IdeaRankConfig.default()
-
-# 2. Initialize providers
-embedding_provider = DummyEmbeddingProvider()
-topic_provider = DummyTopicModelProvider()
-neighborhood_provider = DummyNeighborhoodProvider()
-
-# 3. Create pipeline
 pipeline = IdeaRankPipeline(
     config=config,
-    embedding_provider=embedding_provider,
-    topic_provider=topic_provider,
-    neighborhood_provider=neighborhood_provider,
+    embedding_provider=SentenceTransformerEmbeddingProvider(),
+    topic_provider=LDATopicModelProvider(),
+    neighborhood_provider=DummyNeighborhoodProvider(),
 )
 
-# 4. Create your data
-video = Video(
-    id="video_1",
-    channel_id="channel_1",
-    title="Introduction to IdeaRank",
-    description="How to rank ideas instead of links",
-    transcript="In this video we explore...",
-    published_at=datetime(2024, 1, 1),
-    snapshot_time=datetime.utcnow(),
-    # ... analytics and trust signals ...
+# Process and score
+pipeline.process_content_batch(items)
+pipeline.index_content(items)
+
+for item in items:
+    score = pipeline.score_content_item(item, source)
+    print(f"{item.title}: {score.score:.4f}")
+```
+
+### Using Chroma Cloud
+
+```python
+from idearank.providers.chroma import ChromaProvider
+
+# Initialize Chroma (handles embeddings + vector search)
+chroma = ChromaProvider(
+    chroma_cloud_api_key="your-api-key",
+    chroma_cloud_tenant="your-tenant-id",
+    chroma_cloud_database="your-database",
+    collection_name="my_content",
 )
 
-channel = Channel(
-    id="channel_1",
-    name="IdeaRank Channel",
-    description="Content about ranking algorithms",
-    created_at=datetime(2023, 1, 1),
-    videos=[video],
+# Use in pipeline
+pipeline = IdeaRankPipeline(
+    config=config,
+    embedding_provider=chroma.get_embedding_provider(),
+    topic_provider=LDATopicModelProvider(),
+    neighborhood_provider=chroma.get_neighborhood_provider(),
 )
+```
 
-# 5. Score the video
-pipeline.process_videos_batch(channel.videos)
-pipeline.index_videos(channel.videos)
+## CLI Reference
 
-score = pipeline.score_video(video, channel)
+### Configuration
+```bash
+idearank config show                          # Show current config
+idearank config set-youtube-key KEY          # Set YouTube API key
+idearank config set-gladia-key KEY           # Set Gladia key
+idearank config set-chroma-mode local|cloud  # Choose Chroma mode
+idearank config clear                         # Reset configuration
+```
 
-print(f"IdeaRank Score: {score.score:.4f}")
-print(f"  Uniqueness:  {score.uniqueness.score:.4f}")
-print(f"  Cohesion:    {score.cohesion.score:.4f}")
-print(f"  Learning:    {score.learning.score:.4f}")
-print(f"  Quality:     {score.quality.score:.4f}")
-print(f"  Trust:       {score.trust.score:.4f}")
+### Source Management
+```bash
+idearank source add URL_OR_PATH [TYPE]   # Add a content source
+idearank source list                      # List all sources
+idearank source enable NAME               # Enable a source
+idearank source disable NAME              # Disable a source
+idearank source remove NAME               # Remove a source
+idearank source clear                     # Remove all sources
+```
+
+### Processing
+```bash
+idearank process CHANNEL_URL              # Process single YouTube channel
+idearank process-ghost-export FILE       # Process Ghost export
+idearank process-all                     # Process all enabled sources
+```
+
+### Visualization
+```bash
+idearank viz dashboard                    # Create full dashboard
+idearank viz timeline                     # Scores over time
+idearank viz factors                      # Factor breakdown over time
+idearank viz learning --source-id ID      # Learning trajectory for source
+idearank viz scatter                      # Uniqueness vs Cohesion scatter
 ```
 
 ## Configuration
 
-All hyperparameters are configurable via `IdeaRankConfig`:
+### Custom Weights
+
+Adjust the factor weights to emphasize different aspects:
 
 ```python
-from idearank import IdeaRankConfig
-from idearank.config import FactorWeights
+from idearank.config import IdeaRankConfig, FactorWeights
 
 config = IdeaRankConfig(
     weights=FactorWeights(
-        uniqueness=0.35,  # w_U
-        cohesion=0.20,    # w_C
-        learning=0.25,    # w_L
-        quality=0.15,     # w_Q
-        trust=0.05,       # w_T
-    ),
-    # Per-factor configs
-    uniqueness=UniquenessConfig(k_global=50, min_threshold=0.15),
-    cohesion=CohesionConfig(k_intra=15, window_days=270),
-    learning=LearningConfig(stability_sigma=0.5, min_threshold=0.05),
-    # ... etc
+        uniqueness=0.35,  # Default: emphasize novelty
+        cohesion=0.20,    # Topical consistency
+        learning=0.25,    # Progression over time
+        quality=0.15,     # Engagement quality
+        trust=0.05,       # Citation quality
+    )
 )
 ```
 
-### Default Hyperparameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `k_global` | 50 | Global neighbors for Uniqueness |
-| `k_intra` | 15 | Intra-channel neighbors for Cohesion |
-| `window_days` | 180 | Channel scoring window |
-| `stability_sigma` | 0.5 | Learning stability penalty |
-| `damping_factor` | 0.75 | KnowledgeRank damping (if enabled) |
-
-See `idearank/config.py` for all parameters.
-
-## Channel-Level Scoring
-
-IdeaRank aggregates video scores to channel scores with a learning bonus:
+### Factor-Specific Settings
 
 ```python
-channel_score = pipeline.score_channel(channel)
+# Uniqueness: More global neighbors for comparison
+config.uniqueness.k_global = 100
+config.uniqueness.min_threshold = 0.15
 
-print(f"Channel IdeaRank: {channel_score.score:.4f}")
-print(f"  Mean Video Score: {channel_score.mean_video_score:.4f}")
-print(f"  AUL Bonus: {channel_score.aul_bonus:.4f}")
-print(f"  Crystallization Detected: {channel_score.crystallization_detected}")
+# Cohesion: Tighter intra-source comparison
+config.cohesion.k_intra = 20
+config.cohesion.window_days = 180
+
+# Learning: Target step size
+config.learning.target_step_size = (0.1, 0.4)
+config.learning.min_threshold = 0.05
+
+# Quality: Metric weights
+config.quality.wtpi_weight = 0.5
+config.quality.cr_weight = 0.5
+
+# Trust: Citation analysis
+config.trust.lambda1 = 0.4  # Citations
+config.trust.lambda2 = 0.3  # Source diversity
+config.trust.lambda3 = 0.3  # Corrections
 ```
 
-**Area Under Learning (AUL)**: Rewards consistent forward progression over time.
+## Advanced Features
 
-**Anti-Crystallization**: Detects when a channel stops learning and applies decay.
+### Entity-Idea Citation Parsing
 
-## Network Layer (KnowledgeRank)
+IdeaRank can parse references to people and institutions:
 
-Optional cross-channel influence layer:
+```python
+from idearank.citation_parser import analyze_citations
+
+analysis = analyze_citations(
+    text="John Smith argues that markets are efficient...",
+    use_spacy=True,
+    validate=True,  # Optional: AI validation
+    openai_api_key="your-key",
+)
+
+print(f"Found {analysis.total_attributions} entity-idea connections")
+print(f"Unique entities: {analysis.unique_entities}")
+print(f"Validation accuracy: {analysis.validation_accuracy}")
+```
+
+### Network Layer (KnowledgeRank)
+
+Measure cross-source influence:
 
 ```python
 config.network.enabled = True
+config.network.damping_factor = 0.75
+config.network.influence_threshold = 0.2
 
-kr_scores = pipeline.score_channels_with_network(channels)
+kr_scores = pipeline.score_sources_with_network(sources)
 
-for channel_id, kr in kr_scores.items():
-    print(f"{channel_id}: KR={kr.knowledge_rank:.4f}, IR={kr.idea_rank:.4f}")
-    print(f"  Influence bonus: {kr.influence_bonus:+.4f}")
-    print(f"  Outgoing edges: {len(kr.outgoing_influence)}")
-    print(f"  Incoming edges: {len(kr.incoming_influence)}")
+for source_id, kr_score in kr_scores.items():
+    print(f"{source_id}: KR={kr_score.knowledge_rank:.4f}")
+    print(f"  Influenced by: {len(kr_score.incoming_influence)} sources")
+    print(f"  Influences: {len(kr_score.outgoing_influence)} sources")
 ```
 
-**KnowledgeRank** measures "who learns from whom" using semantic similarity with temporal lag.
+### Diagnostics
 
-## Providers
-
-IdeaRank uses pluggable providers for external services:
-
-### Embedding Providers
-
-```python
-# Dummy (for testing)
-from idearank.providers import DummyEmbeddingProvider
-provider = DummyEmbeddingProvider(dimension=384)
-
-# OpenAI (requires API key)
-from idearank.providers import OpenAIEmbeddingProvider
-provider = OpenAIEmbeddingProvider(model="text-embedding-3-small", api_key="...")
-```
-
-### Topic Model Providers
-
-```python
-# Dummy (for testing)
-from idearank.providers import DummyTopicModelProvider
-provider = DummyTopicModelProvider(num_topics=50)
-
-# LDA (requires trained model)
-from idearank.providers import LDATopicModelProvider
-provider = LDATopicModelProvider(model_path="path/to/lda.pkl")
-```
-
-### Neighborhood Providers
-
-```python
-# Dummy (brute-force, for testing)
-from idearank.providers import DummyNeighborhoodProvider
-provider = DummyNeighborhoodProvider()
-
-# Chroma Cloud (recommended for production)
-from idearank.providers.chroma import ChromaProvider
-chroma = ChromaProvider(
-    api_key="ck-...",
-    tenant="...",
-    database="...",
-    embedding_function="default",
-)
-# Provides BOTH embedding and neighborhood providers
-embedding_provider = chroma.get_embedding_provider()
-neighborhood_provider = chroma.get_neighborhood_provider()
-
-# FAISS (for production)
-from idearank.providers import FAISSNeighborhoodProvider
-provider = FAISSNeighborhoodProvider(dimension=384)
-```
-
-**See [`CHROMA_SETUP.md`](CHROMA_SETUP.md) for complete Chroma Cloud setup guide.**
-
-## Examples
-
-See the `examples/` directory:
-
-- `basic_usage.py`: End-to-end example with dummy providers
-- `custom_weights.py`: Comparing different weight configurations
-- `chroma_usage.py`: Using Chroma Cloud for production
-- **`youtube_pipeline_simple_test.py`**: **NEW!** Complete YouTube → IdeaRank pipeline (works without API keys)
-- `youtube_pipeline_demo.py`: Full pipeline with real YouTube data
+Check data quality:
 
 ```bash
-# Basic demo (no setup needed)
-python examples/basic_usage.py
-
-# Weight comparison
-python examples/custom_weights.py
-
-# Chroma Cloud demo (requires credentials)
-export CHROMA_API_KEY="ck-..."
-export CHROMA_TENANT="..."
-export CHROMA_DATABASE="..."
-python examples/chroma_usage.py
-
-# YouTube pipeline test (works immediately!)
-python examples/youtube_pipeline_simple_test.py
-
-# YouTube pipeline with real data (requires YouTube API key)
-export YOUTUBE_API_KEY="AIza..."
-python examples/youtube_pipeline_demo.py
+# Run diagnostics on your database
+python -c "from idearank.diagnostics import IdeaRankDiagnostics; \
+           diag = IdeaRankDiagnostics('idearank_all_content.db'); \
+           diag.print_report()"
 ```
 
-## Use Cases
+## Data Model
 
-IdeaRank is designed for:
+### ContentItem
+Represents any piece of content (video, blog post, tweet):
+- `id` - Unique identifier
+- `content_source_id` - Parent source ID
+- `title`, `description`, `body` - Content text
+- `published_at`, `captured_at` - Timestamps
+- `embedding`, `topic_mixture` - Computed representations
+- Analytics: `view_count`, `impression_count`, `watch_time_seconds`, etc.
+- Trust signals: `has_citations`, `citation_count`, `source_diversity_score`
 
-1. **Content Discovery**: Surface genuinely novel ideas, not viral clickbait
-2. **Creator Dashboards**: Show learning progression and channel health
-3. **Research**: Track idea evolution across a knowledge graph
-4. **Recommendation**: Suggest content that advances understanding
-5. **Trust Scoring**: Identify well-sourced, verifiable content
+### ContentSource
+Represents a content producer (channel, blog, Twitter account):
+- `id`, `name`, `description` - Identity
+- `content_items` - List of content
+- `subscriber_count`, `total_views` - Metrics
+- Methods: `get_content_in_window()`, `get_prior_content()`
 
-## Design Principles
+## Database Schema
 
-1. **Modularity**: Each factor is independent and swappable
-2. **Configurability**: All hyperparameters exposed and tunable
-3. **Transparency**: Full score breakdowns for debugging
-4. **Extensibility**: Easy to add new factors or providers
-5. **Anti-Gaming**: Multiple factors prevent optimization for any single metric
+IdeaRank uses SQLite with three main tables:
+- `content_items` - All content with metadata
+- `content_sources` - Source metadata
+- `idearank_scores` - Computed scores with factor breakdowns
+- `content_source_rank_scores` - Aggregate source scores
 
-## What It's NOT
+Query example:
+```sql
+SELECT 
+    c.title, 
+    c.published_at,
+    s.score,
+    s.uniqueness_score,
+    s.cohesion_score,
+    s.learning_score
+FROM content_items c
+JOIN idearank_scores s ON c.id = s.content_item_id
+WHERE c.content_source_id = 'your_source'
+ORDER BY s.score DESC
+LIMIT 10;
+```
 
-- ❌ A replacement for engagement metrics (it uses them, normalized)
-- ❌ A content moderation tool (it measures learning, not truthfulness)
-- ❌ A production-ready system (it's a research framework)
-- ❌ Optimized for speed (it's optimized for clarity)
+## Architecture
 
-## Roadmap
+```
+┌─────────────────────────────────────────────────────────┐
+│                   Content Sources                        │
+│  (YouTube, Ghost, Twitter, Custom)                      │
+└────────────────────┬────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│              IdeaRank Pipeline                          │
+│  1. Fetch/Parse Content                                 │
+│  2. Generate Embeddings (sentence-transformers/OpenAI)  │
+│  3. Extract Topics (LDA)                                │
+│  4. Index Vectors (Chroma/Local)                        │
+│  5. Compute Factors (U,C,L,Q,T)                        │
+│  6. Calculate Scores                                    │
+└────────────────────┬────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│                  Storage & Analysis                      │
+│  • SQLite Database (content + scores)                   │
+│  • Visualizations (matplotlib)                          │
+│  • Diagnostics (data quality checks)                    │
+│  • Network Layer (cross-source influence)               │
+└─────────────────────────────────────────────────────────┘
+```
 
-- [ ] Real OpenAI and FAISS provider implementations
-- [ ] Pre-trained topic models for common domains
-- [ ] Analytics normalization across channels
-- [ ] Citation parsing and verification
-- [ ] Temporal trend analysis
-- [ ] Interactive visualization dashboard
-- [ ] Benchmark datasets
+## Requirements
+
+**Core:**
+- Python 3.9+
+- sentence-transformers (default embeddings)
+- scikit-learn (LDA topic modeling)
+- chromadb (vector database)
+- sqlalchemy (data persistence)
+
+**Optional:**
+- openai (better embeddings)
+- spacy (citation parsing)
+- matplotlib, pandas (visualizations)
+
+**External APIs:**
+- YouTube Data API v3 (for YouTube content)
+- Gladia API (for transcription)
+- Chroma Cloud (optional, for cloud vector storage)
+
+## Development
+
+### Running Examples
+
+```bash
+# Basic usage with dummy providers
+python examples/basic_usage.py
+
+# Test with mock YouTube data
+python examples/youtube_pipeline_simple_test.py
+
+# Chroma Cloud integration
+python examples/chroma_usage.py
+
+# Custom weights comparison
+python examples/custom_weights.py
+```
+
+### Running Tests
+
+```bash
+pytest tests/
+```
+
+## Troubleshooting
+
+### Flat Cohesion Scores
+If all cohesion scores are identical, the topic model may not be fitted. IdeaRank uses LDA which needs to be trained on your corpus. This happens automatically in `process_content_batch()`.
+
+### Flat Trust Scores
+If trust scores don't vary, ensure you're using the citation parser. It's enabled by default but requires content with references to people/institutions.
+
+### Missing Embeddings
+IdeaRank defaults to `sentence-transformers`. Install with:
+```bash
+pip install sentence-transformers
+```
+
+Or use OpenAI:
+```bash
+idearank process-all --openai-key YOUR_KEY
+```
+
+### Database Migration
+After the v2.0 refactor, table names changed:
+- `videos` → `content_items`
+- `channels` → `content_sources`
+- `channel_id` → `content_source_id`
+
+You'll need to re-run processing to create new databases.
+
+## Version
+
+**Current Version:** 2.0.0
+
+**Breaking Changes in v2.0:**
+- Renamed `Video` → `ContentItem`
+- Renamed `Channel` → `ContentSource`
+- Updated all database table names
+- Updated all API method names
 
 ## License
 
-MIT
-
-## Citation
-
-If you use IdeaRank in research, please cite:
-
-```
-@software{idearank2024,
-  title={IdeaRank: A Multi-Factor Ranking Algorithm for Ideas},
-  author={Your Name},
-  year={2024},
-  url={https://github.com/yourusername/idearank}
-}
-```
+[Add your license here]
 
 ## Contributing
 
-This is a research framework. Contributions welcome:
+This project is in active development. The architecture is designed to be extensible - adding new content sources is straightforward.
 
-1. Fork the repo
-2. Create a feature branch
-3. Add tests for new functionality
-4. Submit a PR
+## Citation
 
-## Contact
-
-Questions? Open an issue or reach out at [your contact].
-
----
-
-**Remember**: All innovation is cyclical amnesia. IdeaRank just measures how well you're navigating the cycle.
-
+If you use IdeaRank in your research or product, please cite:
+```
+[Add citation here]
+```

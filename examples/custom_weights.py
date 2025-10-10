@@ -5,7 +5,7 @@ Demonstrates different configurations for different use cases.
 
 from datetime import datetime, timedelta
 
-from idearank import IdeaRankConfig, Video, Channel
+from idearank import IdeaRankConfig, ContentItem, ContentSource
 from idearank.config import FactorWeights
 from idearank.pipeline import IdeaRankPipeline
 from idearank.providers import (
@@ -15,37 +15,37 @@ from idearank.providers import (
 )
 
 
-def create_test_channel() -> Channel:
-    """Create a simple test channel."""
-    videos = []
+def create_test_source() -> ContentSource:
+    """Create a simple test content source."""
+    content_items = []
     base_time = datetime(2024, 1, 1)
     
     for i in range(5):
-        video = Video(
-            id=f"video_{i}",
-            channel_id="test_channel",
-            title=f"Video {i}",
-            description=f"Content for video {i}",
-            transcript=f"Transcript content {i} " * 100,
+        item = ContentItem(
+            id=f"item_{i}",
+            content_source_id="test_source",
+            title=f"Content Item {i}",
+            description=f"Content description {i}",
+            body=f"Content body {i} " * 100,
             published_at=base_time + timedelta(days=i * 30),
-            snapshot_time=datetime.utcnow(),
+            captured_at=datetime.utcnow(),
             view_count=1000,
             impression_count=5000,
             watch_time_seconds=100000.0,
             avg_view_duration=200.0,
-            video_duration=300.0,
+            content_duration=300.0,
             has_citations=True,
             citation_count=5,
             source_diversity_score=0.7,
         )
-        videos.append(video)
+        content_items.append(item)
     
-    return Channel(
-        id="test_channel",
-        name="Test Channel",
-        description="A test channel",
+    return ContentSource(
+        id="test_source",
+        name="Test Content Source",
+        description="A test content source",
         created_at=datetime(2023, 1, 1),
-        videos=videos,
+        content_items=content_items,
     )
 
 
@@ -56,8 +56,8 @@ def compare_configurations():
     print("=" * 80)
     
     # Create test data
-    channel = create_test_channel()
-    test_video = channel.videos[2]
+    content_source = create_test_source()
+    test_item = content_source.content_items[2]
     
     # Define different configurations
     configs = {
@@ -120,9 +120,9 @@ def compare_configurations():
         )
         
         # Process and score
-        pipeline.process_videos_batch(channel.videos)
-        pipeline.index_videos(channel.videos)
-        score = pipeline.score_video(test_video, channel)
+        pipeline.process_content_batch(content_source.content_items)
+        pipeline.index_content(content_source.content_items)
+        score = pipeline.score_content_item(test_item, content_source)
         
         results[config_name] = score
         

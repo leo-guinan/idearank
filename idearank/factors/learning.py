@@ -1,9 +1,9 @@
-"""Learning (L) factor: Is the channel advancing ideas, not repeating them?
+"""Learning (L) factor: Is the source advancing ideas, not repeating them?
 
-L(v,t) = Δ_self(v,t) · R(v,t) · S(v,t)
+L(item,t) = Δ_self(item,t) · R(item,t) · S(item,t)
 
 where:
-- Δ_self: semantic step from prior video (reward bounded progress)
+- Δ_self: semantic step from prior content (reward bounded progress)
 - R: revision quality
 - S: stability gate (penalize chaotic jumps)
 
@@ -14,12 +14,12 @@ from typing import Any, Optional
 import numpy as np
 
 from idearank.factors.base import BaseFactor, FactorResult
-from idearank.models import Video, Channel, Embedding
+from idearank.models import ContentItem, ContentSource, Embedding
 from idearank.config import LearningConfig
 
 
 class LearningFactor(BaseFactor):
-    """Computes how much a video advances the channel's learning frontier."""
+    """Computes how much a content item advances the source's learning frontier."""
     
     def __init__(self, config: LearningConfig):
         super().__init__(config)
@@ -31,26 +31,26 @@ class LearningFactor(BaseFactor):
     
     def compute(
         self, 
-        video: Video, 
-        channel: Channel,
+        content_item: ContentItem, 
+        content_source: ContentSource,
         context: Optional[dict[str, Any]] = None
     ) -> FactorResult:
         """Compute learning progression score.
         
         Context can contain:
-            - 'prior_video': the most recent prior video from the same channel
-            - 'recent_videos': list of recent videos for stability calculation
+            - 'prior_content': the most recent prior content from the same source
+            - 'recent_items': list of recent items for stability calculation
             - 'revision_quality': float (optional, defaults to 1.0)
         """
         context = context or {}
         
-        # Get prior video (from context or channel)
-        prior_video = context.get('prior_video')
-        if prior_video is None:
-            prior_video = channel.get_prior_video(video)
+        # Get prior content (from context or source)
+        prior_content = context.get('prior_content')
+        if prior_content is None:
+            prior_content = content_source.get_prior_content(content_item)
         
-        # If no prior video, this is the first - give neutral learning score
-        if prior_video is None:
+        # If no prior content, this is the first - give neutral learning score
+        if prior_content is None:
             return FactorResult(
                 score=0.5,
                 components={
@@ -58,26 +58,26 @@ class LearningFactor(BaseFactor):
                     'revision_quality': 1.0,
                     'stability': 1.0,
                 },
-                metadata={'is_first_video': True}
+                metadata={'is_first_item': True}
             )
         
         # Compute semantic step
-        delta_self = self._compute_delta_self(video, prior_video)
+        delta_self = self._compute_delta_self(content_item, prior_content)
         
         # Get revision quality
         revision_quality = context.get('revision_quality', 1.0)
         revision_quality = max(0.0, min(1.0, revision_quality))
         
         # Compute stability
-        recent_videos = context.get('recent_videos', [])
-        if not recent_videos:
-            # Get recent videos from channel
-            recent_videos = channel.get_videos_in_window(
-                video.published_at,
+        recent_items = context.get('recent_items', [])
+        if not recent_items:
+            # Get recent items from source
+            recent_items = content_source.get_content_in_window(
+                content_item.published_at,
                 window_days=self.config.stability_window_count * 30  # rough conversion
             )[-self.config.stability_window_count:]
         
-        stability = self._compute_stability(video, recent_videos)
+        stability = self._compute_stability(content_item, recent_items)
         
         # Combine factors
         learning = delta_self * revision_quality * stability
@@ -90,21 +90,21 @@ class LearningFactor(BaseFactor):
                 'stability': stability,
             },
             metadata={
-                'prior_video_id': prior_video.id,
-                'recent_video_count': len(recent_videos),
+                'prior_content_id': prior_content.id,
+                'recent_item_count': len(recent_items),
                 'meets_threshold': learning >= self.config.min_threshold,
             }
         )
     
-    def _compute_delta_self(self, video: Video, prior: Video) -> float:
-        """Compute semantic step from prior video.
+    def _compute_delta_self(self, content_item: ContentItem, prior: ContentItem) -> float:
+        """Compute semantic step from prior content.
         
         Rewards progress in the target range, penalizes too small or too large steps.
         """
-        if video.embedding is None or prior.embedding is None:
+        if content_item.embedding is None or prior.embedding is None:
             return 0.5  # Neutral if embeddings missing
         
-        similarity = video.embedding.cosine_similarity(prior.embedding)
+        similarity = content_item.embedding.cosine_similarity(prior.embedding)
         
         # Convert similarity to distance
         distance = 1.0 - similarity
@@ -126,19 +126,19 @@ class LearningFactor(BaseFactor):
         
         return float(max(0.0, min(1.0, delta)))
     
-    def _compute_stability(self, video: Video, recent_videos: list[Video]) -> float:
+    def _compute_stability(self, content_item: ContentItem, recent_items: list[ContentItem]) -> float:
         """Compute stability gate: S = exp(-σ² · Var(embeddings)).
         
         Penalizes chaotic jumps in embedding space.
         """
-        if len(recent_videos) < 2:
+        if len(recent_items) < 2:
             return 1.0  # Not enough history to judge stability
         
         # Collect embeddings
         embeddings = []
-        for v in recent_videos:
-            if v.embedding is not None:
-                embeddings.append(v.embedding.vector)
+        for item in recent_items:
+            if item.embedding is not None:
+                embeddings.append(item.embedding.vector)
         
         if len(embeddings) < 2:
             return 1.0

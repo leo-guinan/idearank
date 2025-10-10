@@ -21,7 +21,7 @@ except ImportError:
 
 import numpy as np
 
-from idearank.models import Video, Embedding, TopicMixture
+from idearank.models import ContentItem, Embedding, TopicMixture
 from idearank.providers.embeddings import EmbeddingProvider
 from idearank.providers.neighborhoods import NeighborhoodProvider
 
@@ -65,7 +65,7 @@ class ChromaEmbeddingProvider(EmbeddingProvider):
         self._embedding_function_name = embedding_function
         self._model_name = model_name or "default"
         
-        # Initialize client
+        # Initialize client (updated chromadb package supports CloudClient with v2 API)
         self.client = chromadb.CloudClient(
             api_key=api_key,
             tenant=tenant,
@@ -153,7 +153,7 @@ class ChromaEmbeddingProvider(EmbeddingProvider):
 class ChromaNeighborhoodProvider(NeighborhoodProvider):
     """Neighborhood provider using Chroma's vector search.
     
-    Stores videos in Chroma collections and uses built-in ANN search.
+    Stores content items in Chroma collections and uses built-in ANN search.
     """
     
     def __init__(
@@ -161,7 +161,7 @@ class ChromaNeighborhoodProvider(NeighborhoodProvider):
         api_key: str,
         tenant: str,
         database: str,
-        collection_name: str = "idearank_videos",
+        collection_name: str = "idearank_content",
         embedding_function: Optional[Any] = None,
     ):
         """Initialize Chroma neighborhood provider.
@@ -170,7 +170,7 @@ class ChromaNeighborhoodProvider(NeighborhoodProvider):
             api_key: Chroma Cloud API key
             tenant: Chroma Cloud tenant ID
             database: Database name
-            collection_name: Name for the video collection
+            collection_name: Name for the content collection
             embedding_function: Optional Chroma embedding function
                 (if None, uses default)
         """
@@ -184,7 +184,7 @@ class ChromaNeighborhoodProvider(NeighborhoodProvider):
         self.database = database
         self.collection_name = collection_name
         
-        # Initialize client
+        # Initialize client (updated chromadb package supports CloudClient with v2 API)
         self.client = chromadb.CloudClient(
             api_key=api_key,
             tenant=tenant,
@@ -205,19 +205,19 @@ class ChromaNeighborhoodProvider(NeighborhoodProvider):
             self.collection = self.client.create_collection(
                 name=collection_name,
                 embedding_function=embedding_function,
-                metadata={"description": "IdeaRank video embeddings"},
+                metadata={"description": "IdeaRank content item embeddings"},
             )
             logger.info(f"Created new collection: {collection_name}")
         
-        # Video lookup cache
-        self._video_cache: Dict[str, Video] = {}
+        # Content item lookup cache
+        self._content_cache: Dict[str, ContentItem] = {}
     
     def find_global_neighbors(
         self,
         embedding: Embedding,
         k: int = 50,
         exclude_ids: Optional[List[str]] = None,
-    ) -> List[Tuple[Video, float]]:
+    ) -> List[Tuple[ContentItem, float]]:
         """Find k nearest neighbors from entire corpus."""
         exclude_ids = exclude_ids or []
         
@@ -229,101 +229,101 @@ class ChromaNeighborhoodProvider(NeighborhoodProvider):
         
         # Parse results
         neighbors = []
-        for i, video_id in enumerate(results['ids'][0]):
-            if video_id in exclude_ids:
+        for i, content_id in enumerate(results['ids'][0]):
+            if content_id in exclude_ids:
                 continue
             
             if len(neighbors) >= k:
                 break
             
-            # Get video from cache
-            if video_id in self._video_cache:
-                video = self._video_cache[video_id]
+            # Get content item from cache
+            if content_id in self._content_cache:
+                content_item = self._content_cache[content_id]
                 # Distance in Chroma is typically L2; convert to similarity
                 # similarity ≈ 1 / (1 + distance)
                 distance = results['distances'][0][i]
                 similarity = 1.0 / (1.0 + distance)
-                neighbors.append((video, similarity))
+                neighbors.append((content_item, similarity))
         
         return neighbors
     
-    def find_intra_channel_neighbors(
+    def find_intra_source_neighbors(
         self,
         embedding: Embedding,
-        channel_id: str,
+        content_source_id: str,
         k: int = 15,
         exclude_ids: Optional[List[str]] = None,
-    ) -> List[Tuple[Video, float]]:
-        """Find k nearest neighbors within a specific channel."""
+    ) -> List[Tuple[ContentItem, float]]:
+        """Find k nearest neighbors within a specific content source."""
         exclude_ids = exclude_ids or []
         
-        # Query with channel filter
+        # Query with source filter
         results = self.collection.query(
             query_embeddings=[embedding.vector.tolist()],
             n_results=k + len(exclude_ids) + 50,  # Get extras for filtering
-            where={"channel_id": channel_id},  # Filter by channel
+            where={"content_source_id": content_source_id},  # Filter by source
         )
         
         # Parse results
         neighbors = []
-        for i, video_id in enumerate(results['ids'][0]):
-            if video_id in exclude_ids:
+        for i, content_id in enumerate(results['ids'][0]):
+            if content_id in exclude_ids:
                 continue
             
             if len(neighbors) >= k:
                 break
             
-            if video_id in self._video_cache:
-                video = self._video_cache[video_id]
+            if content_id in self._content_cache:
+                content_item = self._content_cache[content_id]
                 distance = results['distances'][0][i]
                 similarity = 1.0 / (1.0 + distance)
-                neighbors.append((video, similarity))
+                neighbors.append((content_item, similarity))
         
         return neighbors
     
-    def index_video(self, video: Video) -> None:
-        """Add a video to the Chroma collection."""
-        if video.embedding is None:
-            raise ValueError(f"Video {video.id} has no embedding")
+    def index_content_item(self, content_item: ContentItem) -> None:
+        """Add a content item to the Chroma collection."""
+        if content_item.embedding is None:
+            raise ValueError(f"Content item {content_item.id} has no embedding")
         
         # Add to collection
         self.collection.add(
-            ids=[video.id],
-            embeddings=[video.embedding.vector.tolist()],
+            ids=[content_item.id],
+            embeddings=[content_item.embedding.vector.tolist()],
             metadatas=[{
-                "channel_id": video.channel_id,
-                "title": video.title,
-                "published_at": video.published_at.isoformat(),
+                "content_source_id": content_item.content_source_id,
+                "title": content_item.title,
+                "published_at": content_item.published_at.isoformat(),
             }],
-            documents=[video.full_text],
+            documents=[content_item.full_text],
         )
         
-        # Cache video for retrieval
-        self._video_cache[video.id] = video
+        # Cache content item for retrieval
+        self._content_cache[content_item.id] = content_item
         
-        logger.debug(f"Indexed video: {video.id}")
+        logger.debug(f"Indexed content item: {content_item.id}")
     
-    def index_videos_batch(self, videos: List[Video]) -> None:
-        """Add multiple videos to the collection."""
-        # Filter videos with embeddings
-        valid_videos = [v for v in videos if v.embedding is not None]
+    def index_content_batch(self, content_items: List[ContentItem]) -> None:
+        """Add multiple content items to the collection."""
+        # Filter items with embeddings
+        valid_items = [item for item in content_items if item.embedding is not None]
         
-        if not valid_videos:
-            logger.warning("No videos with embeddings to index")
+        if not valid_items:
+            logger.warning("No content items with embeddings to index")
             return
         
         # Prepare batch data
-        ids = [v.id for v in valid_videos]
-        embeddings = [v.embedding.vector.tolist() for v in valid_videos]
+        ids = [item.id for item in valid_items]
+        embeddings = [item.embedding.vector.tolist() for item in valid_items]
         metadatas = [
             {
-                "channel_id": v.channel_id,
-                "title": v.title,
-                "published_at": v.published_at.isoformat(),
+                "content_source_id": item.content_source_id,
+                "title": item.title,
+                "published_at": item.published_at.isoformat(),
             }
-            for v in valid_videos
+            for item in valid_items
         ]
-        documents = [v.full_text for v in valid_videos]
+        documents = [item.full_text for item in valid_items]
         
         # Batch add to collection
         self.collection.add(
@@ -333,82 +333,121 @@ class ChromaNeighborhoodProvider(NeighborhoodProvider):
             documents=documents,
         )
         
-        # Cache videos
-        for video in valid_videos:
-            self._video_cache[video.id] = video
+        # Cache content items
+        for item in valid_items:
+            self._content_cache[item.id] = item
         
-        logger.info(f"Indexed {len(valid_videos)} videos in batch")
+        logger.info(f"Indexed {len(valid_items)} content items in batch")
     
     def clear_collection(self) -> None:
-        """Clear all videos from the collection."""
+        """Clear all content items from the collection."""
         self.client.delete_collection(name=self.collection_name)
         self.collection = self.client.create_collection(
             name=self.collection_name,
-            metadata={"description": "IdeaRank video embeddings"},
+            metadata={"description": "IdeaRank content item embeddings"},
         )
-        self._video_cache.clear()
+        self._content_cache.clear()
         logger.info(f"Cleared collection: {self.collection_name}")
 
 
 class ChromaProvider:
     """Combined provider for both embedding and neighborhood search.
     
-    This is a convenience class that provides both EmbeddingProvider
-    and NeighborhoodProvider using the same Chroma Cloud instance.
+    Supports both local (persistent) and cloud modes.
     """
     
     def __init__(
         self,
-        api_key: str,
-        tenant: str,
-        database: str,
+        collection_name: str = "idearank_content",
+        persist_directory: Optional[str] = None,
         embedding_function: str = "default",
         model_name: Optional[str] = None,
-        collection_name: str = "idearank_videos",
+        # Cloud-only parameters
+        chroma_cloud_api_key: Optional[str] = None,
+        chroma_cloud_tenant: str = "default_tenant",
+        chroma_cloud_database: str = "default_database",
     ):
         """Initialize combined Chroma provider.
         
         Args:
-            api_key: Chroma Cloud API key
-            tenant: Chroma Cloud tenant ID
-            database: Database name
+            collection_name: Collection name for content storage
+            persist_directory: Local directory for persistence (None = use cloud)
             embedding_function: Chroma embedding function to use
             model_name: Specific model name
-            collection_name: Collection name for video storage
+            chroma_cloud_api_key: Chroma Cloud API key (required for cloud mode)
+            chroma_cloud_tenant: Chroma Cloud tenant (cloud mode only)
+            chroma_cloud_database: Chroma Cloud database (cloud mode only)
         """
         if not CHROMA_AVAILABLE:
             raise ImportError(
                 "chromadb not installed. Install with: pip install chromadb"
             )
         
-        # Initialize embedding provider
-        self.embedding_provider = ChromaEmbeddingProvider(
-            api_key=api_key,
-            tenant=tenant,
-            database=database,
-            embedding_function=embedding_function,
-            model_name=model_name,
-        )
+        self.is_cloud = persist_directory is None
         
-        # Initialize neighborhood provider with same embedding function
-        self.neighborhood_provider = ChromaNeighborhoodProvider(
-            api_key=api_key,
-            tenant=tenant,
-            database=database,
-            collection_name=collection_name,
-            embedding_function=self.embedding_provider._embedding_function,
-        )
-        
-        logger.info(
-            f"Initialized combined Chroma provider: "
-            f"database={database}, collection={collection_name}"
-        )
+        if self.is_cloud:
+            # Cloud mode
+            if not chroma_cloud_api_key:
+                raise ValueError("chroma_cloud_api_key required for cloud mode")
+            
+            logger.info(f"Initializing Chroma Cloud provider: tenant={chroma_cloud_tenant}, db={chroma_cloud_database}")
+            
+            # Initialize embedding provider (cloud)
+            self.embedding_provider = ChromaEmbeddingProvider(
+                api_key=chroma_cloud_api_key,
+                tenant=chroma_cloud_tenant,
+                database=chroma_cloud_database,
+                embedding_function=embedding_function,
+                model_name=model_name,
+            )
+            
+            # Initialize neighborhood provider (cloud)
+            self.neighborhood_provider = ChromaNeighborhoodProvider(
+                api_key=chroma_cloud_api_key,
+                tenant=chroma_cloud_tenant,
+                database=chroma_cloud_database,
+                collection_name=collection_name,
+                embedding_function=self.embedding_provider._embedding_function,
+            )
+            
+            logger.info(f"Chroma Cloud provider ready: collection={collection_name}")
+            
+        else:
+            # Local mode - use dummy providers for now
+            # TODO: Implement local Chroma client support
+            logger.info(f"Initializing local Chroma provider: {persist_directory}")
+            logger.warning("Local Chroma provider not fully implemented yet - using dummy providers")
+            
+            from idearank.providers.embeddings import DummyEmbeddingProvider
+            from idearank.providers.neighborhoods import DummyNeighborhoodProvider
+            
+            self.embedding_provider = DummyEmbeddingProvider(dimension=384)
+            self.neighborhood_provider = DummyNeighborhoodProvider()
+            
+            logger.info(f"Local provider ready (using dummy for now): {persist_directory}")
     
-    def get_embedding_provider(self) -> ChromaEmbeddingProvider:
+    def get_embedding_provider(self):
         """Get the embedding provider."""
         return self.embedding_provider
     
-    def get_neighborhood_provider(self) -> ChromaNeighborhoodProvider:
+    def get_neighborhood_provider(self):
         """Get the neighborhood provider."""
         return self.neighborhood_provider
+    
+    # Delegation methods for neighborhood provider
+    def index_content_item(self, content_item) -> None:
+        """Delegate to neighborhood provider."""
+        self.neighborhood_provider.index_content_item(content_item)
+    
+    def index_content_batch(self, content_items) -> None:
+        """Delegate to neighborhood provider."""
+        self.neighborhood_provider.index_content_batch(content_items)
+    
+    def find_global_neighbors(self, embedding, k: int = 50, exclude_ids=None):
+        """Delegate to neighborhood provider."""
+        return self.neighborhood_provider.find_global_neighbors(embedding, k, exclude_ids)
+    
+    def find_intra_source_neighbors(self, embedding, content_source_id: str, k: int = 15, exclude_ids=None):
+        """Delegate to neighborhood provider."""
+        return self.neighborhood_provider.find_intra_source_neighbors(embedding, content_source_id, k, exclude_ids)
 

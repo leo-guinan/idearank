@@ -1,16 +1,16 @@
 """Basic usage example for IdeaRank.
 
 Demonstrates:
-1. Creating videos and channels
+1. Creating content items and sources
 2. Setting up the pipeline
-3. Computing video and channel scores
+3. Computing content and source scores
 4. Using the network layer
 """
 
 from datetime import datetime, timedelta
 import numpy as np
 
-from idearank import IdeaRankConfig, Video, Channel
+from idearank import IdeaRankConfig, ContentItem, ContentSource
 from idearank.pipeline import IdeaRankPipeline
 from idearank.providers import (
     DummyEmbeddingProvider,
@@ -19,34 +19,34 @@ from idearank.providers import (
 )
 
 
-def create_sample_videos(channel_id: str, count: int = 5) -> list[Video]:
-    """Create sample videos for testing."""
-    videos = []
+def create_sample_content(source_id: str, count: int = 5) -> list[ContentItem]:
+    """Create sample content items for testing."""
+    content_items = []
     base_time = datetime(2024, 1, 1)
     
     for i in range(count):
-        video = Video(
-            id=f"{channel_id}_video_{i}",
-            channel_id=channel_id,
-            title=f"Video {i}: Introduction to Topic {i % 3}",
-            description=f"This is a detailed video about topic {i % 3}. " * 10,
-            transcript=f"In this video we explore topic {i % 3} in depth. " * 50,
+        item = ContentItem(
+            id=f"{source_id}_item_{i}",
+            content_source_id=source_id,
+            title=f"Content {i}: Introduction to Topic {i % 3}",
+            description=f"This is detailed content about topic {i % 3}. " * 10,
+            body=f"In this content we explore topic {i % 3} in depth. " * 50,
             published_at=base_time + timedelta(days=i * 7),
-            snapshot_time=datetime.utcnow(),
+            captured_at=datetime.utcnow(),
             # Analytics
             view_count=1000 * (i + 1),
             impression_count=5000 * (i + 1),
             watch_time_seconds=float(1000 * (i + 1) * 120),
             avg_view_duration=120.0 + i * 10,
-            video_duration=300.0,
+            content_duration=300.0,
             # Trust signals
             has_citations=i % 2 == 0,
             citation_count=i * 2,
             source_diversity_score=0.5 + (i * 0.1),
         )
-        videos.append(video)
+        content_items.append(item)
     
-    return videos
+    return content_items
 
 
 def main():
@@ -78,84 +78,84 @@ def main():
     )
     
     # 4. Create sample data
-    print("\n4. Creating sample channels and videos...")
-    channels = []
+    print("\n4. Creating sample content sources and items...")
+    content_sources = []
     
     for i in range(3):
-        channel = Channel(
-            id=f"channel_{i}",
-            name=f"Channel {i}",
-            description=f"A channel about various topics",
+        source = ContentSource(
+            id=f"source_{i}",
+            name=f"Content Source {i}",
+            description=f"A content source about various topics",
             created_at=datetime(2023, 1, 1),
-            videos=create_sample_videos(f"channel_{i}", count=10),
+            content_items=create_sample_content(f"source_{i}", count=10),
         )
-        channels.append(channel)
+        content_sources.append(source)
     
-    total_videos = sum(len(c.videos) for c in channels)
-    print(f"   Created {len(channels)} channels with {total_videos} total videos")
+    total_items = sum(len(source.content_items) for source in content_sources)
+    print(f"   Created {len(content_sources)} content sources with {total_items} total items")
     
-    # 5. Score a single video
-    print("\n5. Scoring a single video...")
-    test_video = channels[0].videos[3]
-    test_channel = channels[0]
+    # 5. Score a single content item
+    print("\n5. Scoring a single content item...")
+    test_item = content_sources[0].content_items[3]
+    test_source = content_sources[0]
     
     # Process and index (needed for neighborhood search)
-    pipeline.process_videos_batch(test_channel.videos)
-    pipeline.index_videos(test_channel.videos)
+    pipeline.process_content_batch(test_source.content_items)
+    pipeline.index_content(test_source.content_items)
     
-    video_score = pipeline.score_video(test_video, test_channel)
+    item_score = pipeline.score_content_item(test_item, test_source)
     
-    print(f"\n   Video: {test_video.title}")
-    print(f"   Overall IdeaRank Score: {video_score.score:.4f}")
+    print(f"\n   Content: {test_item.title}")
+    print(f"   Overall IdeaRank Score: {item_score.score:.4f}")
     print(f"   Factor Breakdown:")
-    print(f"     - Uniqueness (U):  {video_score.uniqueness.score:.4f}")
-    print(f"     - Cohesion (C):    {video_score.cohesion.score:.4f}")
-    print(f"     - Learning (L):    {video_score.learning.score:.4f}")
-    print(f"     - Quality (Q):     {video_score.quality.score:.4f}")
-    print(f"     - Trust (T):       {video_score.trust.score:.4f}")
-    print(f"   Passes Gates: {video_score.passes_gates}")
+    print(f"     - Uniqueness (U):  {item_score.uniqueness.score:.4f}")
+    print(f"     - Cohesion (C):    {item_score.cohesion.score:.4f}")
+    print(f"     - Learning (L):    {item_score.learning.score:.4f}")
+    print(f"     - Quality (Q):     {item_score.quality.score:.4f}")
+    print(f"     - Trust (T):       {item_score.trust.score:.4f}")
+    print(f"   Passes Gates: {item_score.passes_gates}")
     
-    # 6. Score a channel
-    print("\n6. Scoring a channel...")
-    channel_score = pipeline.score_channel(test_channel)
+    # 6. Score a content source
+    print("\n6. Scoring a content source...")
+    source_score = pipeline.score_source(test_source)
     
-    print(f"\n   Channel: {test_channel.name}")
-    print(f"   Channel IdeaRank Score: {channel_score.score:.4f}")
-    print(f"   Mean Video Score: {channel_score.mean_video_score:.4f}")
-    print(f"   AUL Bonus: {channel_score.aul_bonus:.4f}")
-    print(f"   Videos in Window: {channel_score.video_count}")
-    print(f"   Crystallization Detected: {channel_score.crystallization_detected}")
+    print(f"\n   Source: {test_source.name}")
+    print(f"   Source IdeaRank Score: {source_score.score:.4f}")
+    print(f"   Mean Content Score: {source_score.mean_content_score:.4f}")
+    print(f"   AUL Bonus: {source_score.aul_bonus:.4f}")
+    print(f"   Items in Window: {source_score.content_count}")
+    print(f"   Crystallization Detected: {source_score.crystallization_detected}")
     
     # 7. Compute network scores
-    print("\n7. Computing KnowledgeRank across channels...")
-    kr_scores = pipeline.score_channels_with_network(channels)
+    print("\n7. Computing KnowledgeRank across sources...")
+    kr_scores = pipeline.score_sources_with_network(content_sources)
     
-    print("\n   Channel Rankings:")
+    print("\n   Source Rankings:")
     print("   " + "-" * 50)
     
     # Sort by KR score
-    sorted_channels = sorted(
+    sorted_sources = sorted(
         kr_scores.items(),
         key=lambda x: x[1].knowledge_rank,
         reverse=True
     )
     
-    for channel_id, kr_score in sorted_channels:
-        channel_name = next(c.name for c in channels if c.id == channel_id)
-        print(f"   {channel_name:15} | KR: {kr_score.knowledge_rank:.4f} | "
+    for source_id, kr_score in sorted_sources:
+        source_name = next(source.name for source in content_sources if source.id == source_id)
+        print(f"   {source_name:20} | KR: {kr_score.knowledge_rank:.4f} | "
               f"IR: {kr_score.idea_rank:.4f} | "
               f"Influence: {kr_score.influence_bonus:+.4f}")
-        print(f"                   | Out edges: {len(kr_score.outgoing_influence)} | "
+        print(f"                        | Out edges: {len(kr_score.outgoing_influence)} | "
               f"In edges: {len(kr_score.incoming_influence)}")
     
     # 8. Export results
     print("\n8. Exporting results to dict...")
-    video_dict = video_score.to_dict()
-    channel_dict = channel_score.to_dict()
-    kr_dict = {cid: score.to_dict() for cid, score in kr_scores.items()}
+    item_dict = item_score.to_dict()
+    source_dict = source_score.to_dict()
+    kr_dict = {source_id: score.to_dict() for source_id, score in kr_scores.items()}
     
-    print(f"   Exported {len(video_dict)} video fields")
-    print(f"   Exported {len(channel_dict)} channel fields")
+    print(f"   Exported {len(item_dict)} content item fields")
+    print(f"   Exported {len(source_dict)} source fields")
     print(f"   Exported {len(kr_dict)} KnowledgeRank scores")
     
     print("\n" + "=" * 60)
