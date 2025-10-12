@@ -6,17 +6,18 @@ from typing import Literal
 
 @dataclass
 class FactorWeights:
-    """Weights for the five main IdeaRank factors."""
+    """Weights for the six main IdeaRank factors."""
     
-    uniqueness: float = 0.35  # w_U
-    cohesion: float = 0.20     # w_C
-    learning: float = 0.25     # w_L
-    quality: float = 0.15      # w_Q
+    uniqueness: float = 0.30  # w_U
+    cohesion: float = 0.18     # w_C
+    learning: float = 0.22     # w_L
+    quality: float = 0.13      # w_Q
     trust: float = 0.05        # w_T
+    density: float = 0.12      # w_D - NEW: Information density
     
     def validate(self) -> None:
         """Ensure weights are non-negative (don't need to sum to 1 due to product)."""
-        weights = [self.uniqueness, self.cohesion, self.learning, self.quality, self.trust]
+        weights = [self.uniqueness, self.cohesion, self.learning, self.quality, self.trust, self.density]
         if any(w < 0 for w in weights):
             raise ValueError("All weights must be non-negative")
         if all(w == 0 for w in weights):
@@ -71,6 +72,25 @@ class TrustConfig:
 
 
 @dataclass
+class DensityConfig:
+    """Configuration for Density (D) factor."""
+    
+    # Weights for different density metrics
+    citation_density_weight: float = 0.25
+    concept_diversity_weight: float = 0.25
+    information_efficiency_weight: float = 0.25
+    explicitness_weight: float = 0.25
+    
+    # Audience optimization
+    audience: Literal["human", "ai", "balanced"] = "balanced"
+    
+    # Reference values for normalization
+    min_words: int = 100
+    ideal_citations_per_1k: float = 5.0
+    ideal_unique_word_ratio: float = 0.5
+
+
+@dataclass
 class ContentSourceRankConfig:
     """Configuration for content source-level scoring."""
     
@@ -110,6 +130,7 @@ class IdeaRankConfig:
     learning: LearningConfig = field(default_factory=LearningConfig)
     quality: QualityConfig = field(default_factory=QualityConfig)
     trust: TrustConfig = field(default_factory=TrustConfig)
+    density: DensityConfig = field(default_factory=DensityConfig)
     
     # Higher-level configurations
     content_source: ContentSourceRankConfig = field(default_factory=ContentSourceRankConfig)

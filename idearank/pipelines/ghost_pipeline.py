@@ -42,14 +42,14 @@ class GhostPipeline:
     def process_blog(
         self,
         blog_url: str,
-        max_posts: int = 50,
+        max_posts: Optional[int] = 50,
         filter_query: Optional[str] = None,
     ) -> tuple[ContentSource, dict]:
         """Process entire Ghost blog.
         
         Args:
             blog_url: Ghost blog URL (e.g., "https://blog.example.com")
-            max_posts: Maximum number of posts to process
+            max_posts: Maximum number of posts to process (None = all posts)
             filter_query: Optional Ghost filter (e.g., "tag:python")
             
         Returns:

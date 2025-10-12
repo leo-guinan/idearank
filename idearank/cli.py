@@ -82,17 +82,30 @@ def set_youtube_key(api_key: str):
     rprint("[green]✓[/green] YouTube API key saved")
 
 
-@config.command("set-gladia-key")
-@click.argument("api_key")
-def set_gladia_key(api_key: str):
-    """Set Gladia API key for transcription.
+@config.command("set-whisper-model")
+@click.argument("model", type=click.Choice(["tiny", "base", "small", "medium", "large"]))
+def set_whisper_model(model: str):
+    """Set Whisper model size for transcription.
     
-    Get your API key from: https://gladia.io
+    Options: tiny (fastest), base, small (default), medium, large (best quality)
     """
     cfg = CLIConfig()
-    cfg.set_gladia_api_key(api_key)
+    cfg.set_whisper_model(model)
     
-    rprint("[green]✓[/green] Gladia API key saved")
+    rprint(f"[green]✓[/green] Whisper model set to: {model}")
+
+
+@config.command("set-whisper-device")
+@click.argument("device", type=click.Choice(["cpu", "cuda", "auto"]))
+def set_whisper_device(device: str):
+    """Set Whisper device for transcription.
+    
+    Options: cpu, cuda (GPU), auto (default - uses GPU if available)
+    """
+    cfg = CLIConfig()
+    cfg.set_whisper_device(device)
+    
+    rprint(f"[green]✓[/green] Whisper device set to: {device}")
 
 
 @config.command("set-chroma-mode")
@@ -128,7 +141,8 @@ def show_config():
     table.add_column("Value", style="green")
     
     table.add_row("YouTube API Key", config_data.get("youtube_api_key") or "[red]Not set[/red]")
-    table.add_row("Gladia API Key", config_data.get("gladia_api_key") or "[yellow]Not set (optional)[/yellow]")
+    table.add_row("Whisper Model", config_data.get("whisper_model", "small"))
+    table.add_row("Whisper Device", config_data.get("whisper_device", "auto"))
     table.add_row("Chroma Mode", config_data.get("chroma_mode", "local"))
     
     if config_data.get("chroma_mode") == "cloud":
@@ -158,48 +172,29 @@ def clear_config():
 @source.command("add")
 @click.argument("url_or_file")
 @click.option("--name", help="Display name for this source")
-@click.option("--max-items", default=50, help="Maximum items to process")
+@click.option("--max-items", default=50, type=int, help="Maximum items to process")
+@click.option("--all", "process_all_items", is_flag=True, help="Process ALL items (sets max-items to unlimited)")
 @click.option("--filter", "filter_query", help="Filter query (e.g., 'tag:python')")
-@click.option("--type", "content_type", type=click.Choice(["youtube", "ghost_export", "ghost_api", "twitter", "auto"]), default="auto", help="Content type (auto-detect by default)")
-def add_source(url_or_file: str, name: Optional[str], max_items: int, filter_query: Optional[str], content_type: str):
+@click.option("--type", "content_type", type=click.Choice(["youtube", "ghost_export", "ghost_api", "medium", "twitter", "auto"]), default="auto", help="Content type (auto-detect by default)")
+def add_source(url_or_file: str, name: Optional[str], max_items: int, process_all_items: bool, filter_query: Optional[str], content_type: str):
     """Add a content source to process.
     
     Examples:
         idearank source add https://youtube.com/@channel
-        idearank source add my-blog.ghost.json
-        idearank source add https://blog.example.com --type ghost_api
-        idearank source add @username
+        idearank source add my-blog.ghost.json --all
+        idearank source add https://blog.example.com --type ghost_api --max-items 100
+        idearank source add ~/Downloads/twitter-archive.json --type twitter --all
     """
     sources_config = SourcesConfig()
     
-    # Special handling for Twitter sources
-    if content_type == "twitter" or (content_type == "auto" and ContentSource._is_twitter_handle(url_or_file)):
-        # Check if archive is available
-        from idearank.integrations.twitter import check_twitter_archive
-        
-        username = url_or_file.lstrip('@').strip()
-        availability = check_twitter_archive(username)
-        
-        if availability['available'] is True:
-            click.echo(f"✓ Twitter archive found for @{username}")
-            click.echo(f"  Archive URL: {availability['archive_url']}")
-        elif availability['available'] is False:
-            click.echo(f"✗ No Twitter archive found for @{username}")
-            click.echo(f"  Upload your archive at: {availability.get('upload_url', 'https://community-archive.org/upload')}")
-        else:
-            click.echo(f"⚠️  Can't verify Twitter archive availability for @{username}")
-            click.echo(f"  Check manually at: {availability.get('archive_url', 'https://community-archive.org/search')}")
-            click.echo(f"  User directory: {availability.get('user_directory_url', 'https://community-archive.org/user-dir')}")
-            click.echo(f"  Upload at: {availability.get('upload_url', 'https://community-archive.org/upload')}")
-            click.echo("  Note: Community Archive doesn't provide a public API for checking availability.")
-        
-        click.echo("  You can still add the source - it will be processed when an archive becomes available.")
+    # Determine actual max_items value
+    actual_max_items = -1 if process_all_items else max_items  # -1 signals unlimited
     
     # Create source with auto-detection
     source = ContentSource.create(
         url_or_path=url_or_file,
         name=name,
-        max_items=max_items,
+        max_items=actual_max_items,
         filter_query=filter_query,
     )
     
@@ -219,7 +214,7 @@ def add_source(url_or_file: str, name: Optional[str], max_items: int, filter_que
         rprint(f"[green]✓[/green] Added source: {source.name}")
         rprint(f"    Type: {source.type}")
         rprint(f"    ID: {source.id}")
-        rprint(f"    Max items: {source.max_items}")
+        rprint(f"    Max items: {'ALL (unlimited)' if source.max_items == -1 else source.max_items}")
         if source.filter_query:
             rprint(f"    Filter: {source.filter_query}")
     except ValueError as e:
@@ -250,12 +245,13 @@ def list_sources(enabled_only: bool):
     for source in sources:
         status = "[green]✓[/green]" if source.enabled else "[dim]✗[/dim]"
         last_proc = source.last_processed[:19] if source.last_processed else "Never"
+        max_items_display = "ALL" if source.max_items == -1 else str(source.max_items)
         
         table.add_row(
             source.id,
             source.name or source.url_or_path[:25],
             source.type,
-            str(source.max_items),
+            max_items_display,
             status,
             last_proc,
         )
@@ -597,6 +593,8 @@ def process_all(output: str, collection: str, openai_key: Optional[str]):
                 _process_ghost_api_source(source, cfg, output, collection, openai_key)
             elif source.type == "twitter":
                 _process_twitter_source(source, output, collection, openai_key)
+            elif source.type == "medium":
+                _process_medium_source(source, output, collection, openai_key)
             else:
                 rprint(f"[red]✗[/red] Unknown source type: {source.type}")
                 continue
@@ -621,13 +619,17 @@ def _process_youtube_source(source: ContentSource, cfg: CLIConfig, output: str, 
     """Process a YouTube source."""
     from idearank.providers.embeddings import SentenceTransformerEmbeddingProvider, DummyEmbeddingProvider
     
+    # Convert -1 to None for unlimited
+    max_videos = None if source.max_items == -1 else source.max_items
+    
     # Initialize storage
     storage = SQLiteStorage(db_path=output)
     
     # YouTube client
     youtube_client = YouTubeClient(
         youtube_api_key=cfg.get_youtube_api_key(),
-        gladia_api_key=cfg.get_gladia_api_key(),
+        whisper_model=cfg.get_whisper_model(),
+        whisper_device=cfg.get_whisper_device(),
         storage=storage,
     )
     
@@ -667,7 +669,7 @@ def _process_youtube_source(source: ContentSource, cfg: CLIConfig, output: str, 
     # Process
     youtube_pipeline.process_channel(
         channel_url=source.url_or_path,
-        max_videos=source.max_items,
+        max_videos=max_videos,
     )
     
     storage.close()
@@ -677,6 +679,9 @@ def _process_ghost_export_source(source: ContentSource, output: str, collection:
     """Process a Ghost export source."""
     from idearank.providers.embeddings import SentenceTransformerEmbeddingProvider, DummyEmbeddingProvider
     from idearank.integrations.ghost_export import GhostExportClient
+    
+    # Convert -1 to None for unlimited
+    max_posts = None if source.max_items == -1 else source.max_items
     
     # Initialize storage
     storage = SQLiteStorage(db_path=output)
@@ -723,7 +728,7 @@ def _process_ghost_export_source(source: ContentSource, output: str, collection:
     # Process
     ghost_pipeline.process_blog(
         blog_url=ghost_client.blog_url,
-        max_posts=source.max_items,
+        max_posts=max_posts,
         filter_query=source.filter_query,
     )
     
@@ -731,11 +736,14 @@ def _process_ghost_export_source(source: ContentSource, output: str, collection:
 
 
 def _process_twitter_source(source: ContentSource, output: str, collection: str, openai_key: Optional[str]):
-    """Process a Twitter source."""
+    """Process a Twitter source from local JSON file."""
     from idearank.providers.embeddings import SentenceTransformerEmbeddingProvider, DummyEmbeddingProvider, OpenAIEmbeddingProvider
     from idearank.providers.topics import LDATopicModelProvider, DummyTopicModelProvider
     from idearank.pipelines.twitter_pipeline import process_twitter_archive
-    from idearank.integrations.twitter import fetch_twitter_archive
+    from idearank.integrations.twitter import load_twitter_archive
+    
+    # Convert -1 to None for unlimited
+    limit = None if source.max_items == -1 else source.max_items
     
     # Initialize storage
     storage = SQLiteStorage(db_path=output)
@@ -763,29 +771,23 @@ def _process_twitter_source(source: ContentSource, output: str, collection: str,
     except ImportError:
         topic_provider = DummyTopicModelProvider()
     
-    # Check if it's a direct archive URL or username
-    archive_url = None
-    username = source.url_or_path.lstrip('@').strip()
+    # Load the Twitter archive from JSON file
+    file_path = source.url_or_path
+    rprint(f"[blue]Loading Twitter archive from: {file_path}...[/blue]")
     
-    if source.url_or_path.startswith('http'):
-        archive_url = source.url_or_path
-        # Don't pass username for URL-based fetching - let it extract from URL
-        username = None
-        rprint(f"[blue]Fetching Twitter archive from direct URL...[/blue]")
-    else:
-        rprint(f"[blue]Looking up Twitter archive in Community Archive...[/blue]")
-    
-    # Fetch the archive first
-    archive = fetch_twitter_archive(username, limit=source.max_items, archive_url=archive_url)
-    
-    if not archive:
-        if archive_url:
-            rprint(f"[red]❌ Could not fetch Twitter archive from URL: {archive_url}[/red]")
-        else:
-            rprint(f"[red]❌ Could not fetch Twitter archive for @{username}. Archive may not be available on Community Archive.[/red]")
+    try:
+        archive = load_twitter_archive(file_path)
+    except FileNotFoundError:
+        rprint(f"[red]❌ File not found: {file_path}[/red]")
+        return
+    except ValueError as e:
+        rprint(f"[red]❌ Invalid archive format: {e}[/red]")
+        return
+    except Exception as e:
+        rprint(f"[red]❌ Error loading archive: {e}[/red]")
         return
     
-    rprint(f"[green]✅ Fetched {len(archive.posts)} tweets from @{archive.username}[/green]")
+    rprint(f"[green]✅ Loaded {len(archive.posts)} tweets from @{archive.username}[/green]")
     
     # Process Twitter archive
     rprint(f"[blue]Processing Twitter archive for @{archive.username}...[/blue]")
@@ -796,6 +798,7 @@ def _process_twitter_source(source: ContentSource, output: str, collection: str,
         embedding_provider=embedding_provider,
         topic_provider=topic_provider,
         chroma_provider=chroma_provider,
+        limit=limit,
     )
     
     if results['success']:
@@ -807,7 +810,61 @@ def _process_twitter_source(source: ContentSource, output: str, collection: str,
         rprint(f"  Unique hashtags: {stats['unique_hashtags']}")
         rprint(f"  Unique mentions: {stats['unique_mentions']}")
     else:
-        rprint(f"[red]✗[/red] {results['error']}")
+        rprint(f"[red]✗[/red] {results.get('error', 'Unknown error')}")
+    
+    storage.close()
+
+
+def _process_medium_source(source: ContentSource, output: str, collection: str, openai_key: Optional[str]):
+    """Process a Medium archive source."""
+    from idearank.providers.embeddings import SentenceTransformerEmbeddingProvider, DummyEmbeddingProvider, OpenAIEmbeddingProvider
+    from idearank.providers.topics import LDATopicModelProvider, DummyTopicModelProvider
+    from idearank.pipelines.medium_pipeline import process_medium_archive
+    
+    # Convert -1 to None for unlimited
+    limit = None if source.max_items == -1 else source.max_items
+    
+    # Initialize storage
+    storage = SQLiteStorage(db_path=output)
+    
+    # Chroma provider
+    persist_dir = Path.home() / ".idearank" / "chroma_db"
+    persist_dir.mkdir(parents=True, exist_ok=True)
+    chroma_provider = ChromaProvider(
+        collection_name=collection,
+        persist_directory=str(persist_dir),
+    )
+    
+    # Embedding provider
+    if openai_key:
+        embedding_provider = OpenAIEmbeddingProvider(api_key=openai_key)
+    else:
+        try:
+            embedding_provider = SentenceTransformerEmbeddingProvider(model_name="all-MiniLM-L6-v2")
+        except ImportError:
+            embedding_provider = DummyEmbeddingProvider(dimension=384)
+    
+    # Topic provider
+    try:
+        topic_provider = LDATopicModelProvider(num_topics=30)
+    except ImportError:
+        topic_provider = DummyTopicModelProvider()
+    
+    # Process archive
+    content_source, stats = process_medium_archive(
+        archive_path=source.url_or_path,
+        storage=storage,
+        embedding_provider=embedding_provider,
+        topic_provider=topic_provider,
+        neighborhood_provider=chroma_provider,
+        limit=limit,
+        skip_drafts=True,
+    )
+    
+    rprint(f"[green]✓[/green] Processed {stats['total_posts']} posts")
+    rprint(f"  Average score: {stats['avg_score']:.4f}")
+    rprint(f"  Score range: {stats['min_score']:.4f} - {stats['max_score']:.4f}")
+    rprint(f"  Total claps: {stats['total_claps']:,}")
     
     storage.close()
 
@@ -815,6 +872,9 @@ def _process_twitter_source(source: ContentSource, output: str, collection: str,
 def _process_ghost_api_source(source: ContentSource, cfg: CLIConfig, output: str, collection: str, openai_key: Optional[str]):
     """Process a Ghost API source."""
     from idearank.providers.embeddings import SentenceTransformerEmbeddingProvider, DummyEmbeddingProvider
+    
+    # Convert -1 to None for unlimited
+    max_posts = None if source.max_items == -1 else source.max_items
     
     # Initialize storage
     storage = SQLiteStorage(db_path=output)
@@ -862,7 +922,7 @@ def _process_ghost_api_source(source: ContentSource, cfg: CLIConfig, output: str
     # Process
     ghost_pipeline.process_blog(
         blog_url=source.url_or_path,
-        max_posts=source.max_items,
+        max_posts=max_posts,
         filter_query=source.filter_query,
     )
     
@@ -871,23 +931,24 @@ def _process_ghost_api_source(source: ContentSource, cfg: CLIConfig, output: str
 
 @main.command()
 @click.argument("channel_url")
-@click.option("--max-videos", default=50, help="Maximum number of videos to process")
+@click.option("--max-videos", default=50, type=int, help="Maximum number of videos to process")
+@click.option("--all", "process_all_videos", is_flag=True, help="Process ALL videos (ignores --max-videos)")
 @click.option("--output", default="idearank_results.db", help="SQLite database output path")
 @click.option("--collection", default=None, help="Chroma collection name (default: auto-generated)")
-@click.option("--use-gladia/--no-gladia", default=False, help="Use Gladia for missing transcripts")
 @click.option("--openai-key", envvar="OPENAI_API_KEY", help="OpenAI API key for embeddings")
 def process(
     channel_url: str,
     max_videos: int,
+    process_all_videos: bool,
     output: str,
     collection: Optional[str],
-    use_gladia: bool,
     openai_key: Optional[str],
 ):
     """Process a YouTube channel and compute IdeaRank scores.
     
     Example:
         idearank process https://youtube.com/@channelname --max-videos 20
+        idearank process https://youtube.com/@channelname --all
     """
     # Load config
     cfg = CLIConfig()
@@ -898,14 +959,17 @@ def process(
         rprint("\nRun [cyan]idearank config show[/cyan] to see current configuration")
         raise click.Abort()
     
+    # Determine actual max_videos value
+    actual_max_videos = None if process_all_videos else max_videos
+    
     # Show configuration summary
     console.print(Panel.fit(
         f"[bold]Processing YouTube Channel[/bold]\n\n"
         f"Channel: {channel_url}\n"
-        f"Max Videos: {max_videos}\n"
+        f"Max Videos: {'ALL (pagination enabled)' if process_all_videos else max_videos}\n"
         f"Output: {output}\n"
         f"Chroma Mode: {cfg.get_chroma_mode()}\n"
-        f"Use Gladia: {'Yes' if use_gladia else 'No (YouTube transcripts only)'}",
+        f"Whisper Model: {cfg.get_whisper_model()}",
         border_style="blue"
     ))
     
@@ -919,11 +983,11 @@ def process(
         
         # YouTube client (with storage for transcript caching)
         youtube_api_key = cfg.get_youtube_api_key()
-        gladia_api_key = cfg.get_gladia_api_key() if use_gladia else None
         
         youtube_client = YouTubeClient(
             youtube_api_key=youtube_api_key,
-            gladia_api_key=gladia_api_key,
+            whisper_model=cfg.get_whisper_model(),
+            whisper_device=cfg.get_whisper_device(),
             storage=storage,  # Enable transcript caching
         )
         rprint("[green]✓[/green] YouTube client ready (with transcript caching)")
@@ -998,9 +1062,11 @@ def process(
         
         # Process channel
         rprint("\n[bold]Processing channel...[/bold]")
+        if process_all_videos:
+            rprint("[yellow]⚠[/yellow]  Processing ALL videos - this may take a while!")
         content_source, scores = youtube_pipeline.process_channel(
             channel_url=channel_url,
-            max_videos=max_videos,
+            max_videos=actual_max_videos,
         )
         
         # Display results
@@ -1056,7 +1122,8 @@ def process(
 
 @main.command("process-ghost-export")
 @click.argument("export_file", type=click.Path(exists=True))
-@click.option("--max-posts", default=50, help="Maximum number of posts to process")
+@click.option("--max-posts", default=50, type=int, help="Maximum number of posts to process")
+@click.option("--all", "process_all_posts", is_flag=True, help="Process ALL posts (ignores --max-posts)")
 @click.option("--output", default="idearank_results.db", help="SQLite database output path")
 @click.option("--collection", default=None, help="Chroma collection name (default: auto-generated)")
 @click.option("--filter", "filter_query", default=None, help="Filter: 'tag:NAME' or 'author:NAME'")
@@ -1064,6 +1131,7 @@ def process(
 def process_ghost_export(
     export_file: str,
     max_posts: int,
+    process_all_posts: bool,
     output: str,
     collection: Optional[str],
     filter_query: Optional[str],
@@ -1075,12 +1143,16 @@ def process_ghost_export(
     
     Example:
         idearank process-ghost-export my-blog.ghost.2024-10-09.json --max-posts 20
+        idearank process-ghost-export my-blog.ghost.2024-10-09.json --all
     """
+    # Determine actual max_posts value
+    actual_max_posts = None if process_all_posts else max_posts
+    
     # Show configuration summary
     console.print(Panel.fit(
         f"[bold]Processing Ghost Export File[/bold]\n\n"
         f"Export File: {export_file}\n"
-        f"Max Posts: {max_posts}\n"
+        f"Max Posts: {'ALL' if process_all_posts else max_posts}\n"
         f"Output: {output}\n"
         f"Filter: {filter_query or 'None'}",
         border_style="blue"
@@ -1161,9 +1233,11 @@ def process_ghost_export(
         
         # Process blog
         rprint("\n[bold]Processing blog...[/bold]")
+        if process_all_posts:
+            rprint("[yellow]⚠[/yellow]  Processing ALL posts - this may take a while!")
         content_source, scores = ghost_pipeline.process_blog(
             blog_url=ghost_client.blog_url,
-            max_posts=max_posts,
+            max_posts=actual_max_posts,
             filter_query=filter_query,
         )
         
@@ -1218,9 +1292,175 @@ def process_ghost_export(
         raise
 
 
+@main.command("process-medium")
+@click.argument("archive_file", type=click.Path(exists=True))
+@click.option("--max-posts", default=50, type=int, help="Maximum number of posts to process")
+@click.option("--all", "process_all_posts", is_flag=True, help="Process ALL posts (ignores --max-posts)")
+@click.option("--skip-drafts/--include-drafts", default=True, help="Skip draft posts")
+@click.option("--output", default="idearank_results.db", help="SQLite database output path")
+@click.option("--collection", default=None, help="Chroma collection name (default: auto-generated)")
+@click.option("--openai-key", envvar="OPENAI_API_KEY", help="OpenAI API key for embeddings")
+def process_medium(
+    archive_file: str,
+    max_posts: int,
+    process_all_posts: bool,
+    skip_drafts: bool,
+    output: str,
+    collection: Optional[str],
+    openai_key: Optional[str],
+):
+    """Process a Medium archive ZIP file and compute IdeaRank scores.
+    
+    Export your Medium archive: Settings → Security and apps → Download your information
+    
+    Note: Comments and short responses are automatically filtered out to focus on
+    substantive content. Use --include-drafts to process draft posts.
+    
+    Example:
+        idearank process-medium medium-export.zip --max-posts 20
+        idearank process-medium medium-export.zip --all
+    """
+    # Determine actual max_posts value
+    actual_max_posts = None if process_all_posts else max_posts
+    
+    # Show configuration summary
+    console.print(Panel.fit(
+        f"[bold]Processing Medium Archive[/bold]\n\n"
+        f"Archive File: {archive_file}\n"
+        f"Max Posts: {'ALL' if process_all_posts else max_posts}\n"
+        f"Skip Drafts: {skip_drafts}\n"
+        f"Output: {output}",
+        border_style="blue"
+    ))
+    
+    try:
+        # Initialize components
+        rprint("\n[bold]Initializing components...[/bold]")
+        
+        # Storage
+        storage = SQLiteStorage(db_path=output)
+        rprint(f"[green]✓[/green] SQLite storage ready: {output}")
+        
+        # Chroma provider (use local)
+        persist_dir = Path.home() / ".idearank" / "chroma_db"
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        
+        chroma_provider = ChromaProvider(
+            collection_name=collection or f"idearank_{Path(output).stem}",
+            persist_directory=str(persist_dir),
+        )
+        rprint(f"[green]✓[/green] Chroma local provider ready: {persist_dir}")
+        
+        # Embedding provider
+        if openai_key:
+            embedding_provider = OpenAIEmbeddingProvider(api_key=openai_key)
+            rprint("[green]✓[/green] OpenAI embedding provider ready")
+        else:
+            try:
+                from idearank.providers.embeddings import SentenceTransformerEmbeddingProvider
+                embedding_provider = SentenceTransformerEmbeddingProvider(
+                    model_name="all-MiniLM-L6-v2"
+                )
+                rprint("[green]✓[/green] Sentence-transformers embedding provider ready (all-MiniLM-L6-v2)")
+            except ImportError:
+                from idearank.providers.embeddings import DummyEmbeddingProvider
+                embedding_provider = DummyEmbeddingProvider(dimension=384)
+                rprint("[yellow]⚠[/yellow]  Using dummy embeddings (install sentence-transformers for better quality)")
+        
+        # Topic provider
+        try:
+            topic_provider = LDATopicModelProvider(num_topics=30)
+            rprint("[green]✓[/green] LDA topic model ready (30 topics)")
+        except ImportError:
+            topic_provider = DummyTopicModelProvider()
+            rprint("[yellow]⚠[/yellow]  Using dummy topic model (install scikit-learn for better cohesion scores)")
+        
+        # Process Medium archive
+        from idearank.pipelines.medium_pipeline import process_medium_archive
+        
+        rprint("\n[bold]Processing Medium archive...[/bold]")
+        if process_all_posts:
+            rprint("[yellow]⚠[/yellow]  Processing ALL posts - this may take a while!")
+        content_source, stats = process_medium_archive(
+            archive_path=archive_file,
+            storage=storage,
+            embedding_provider=embedding_provider,
+            topic_provider=topic_provider,
+            neighborhood_provider=chroma_provider,
+            limit=actual_max_posts,
+            skip_drafts=skip_drafts,
+        )
+        
+        # Display results
+        rprint("\n[bold green]✓ Processing complete![/bold green]")
+        
+        # Show statistics
+        rprint(f"\n[bold]Medium Blog:[/bold] {content_source.name}")
+        rprint(f"  Total posts processed: {stats['total_posts']}")
+        rprint(f"  Average IdeaRank score: {stats['avg_score']:.4f}")
+        rprint(f"  Score range: {stats['min_score']:.4f} - {stats['max_score']:.4f}")
+        rprint(f"  Total claps: {stats['total_claps']:,}")
+        rprint(f"  Average word count: {stats['avg_word_count']:.0f}")
+        
+        if stats['date_range']['earliest']:
+            rprint(f"  Date range: {stats['date_range']['earliest'].strftime('%Y-%m-%d')} to {stats['date_range']['latest'].strftime('%Y-%m-%d')}")
+        
+        rprint(f"\n[bold]Results saved to:[/bold] {output}")
+        rprint(f"[bold]Chroma collection:[/bold] {collection or f'idearank_{Path(output).stem}'}")
+        
+        # Show top posts
+        rprint("\n[bold]Top 10 Posts by IdeaRank:[/bold]")
+        
+        # Query database for top posts
+        import sqlite3
+        conn = sqlite3.connect(output)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT c.title, s.score, s.uniqueness_score, s.cohesion_score, 
+                   s.learning_score, s.quality_score, s.trust_score
+            FROM content_items c
+            JOIN idearank_scores s ON c.id = s.content_item_id
+            WHERE c.content_source_id = ?
+            ORDER BY s.score DESC
+            LIMIT 10
+        """, (content_source.id,))
+        
+        table = Table(title=f"Top Posts - {content_source.name}")
+        table.add_column("Rank", style="cyan", width=4)
+        table.add_column("Title", style="white", width=50)
+        table.add_column("Score", style="green", width=8)
+        table.add_column("U", style="blue", width=6)
+        table.add_column("C", style="blue", width=6)
+        table.add_column("L", style="blue", width=6)
+        table.add_column("Q", style="blue", width=6)
+        table.add_column("T", style="blue", width=6)
+        
+        for idx, row in enumerate(cursor.fetchall(), 1):
+            title, score, u, c, l, q, t = row
+            table.add_row(
+                str(idx),
+                title[:47] + "..." if len(title) > 50 else title,
+                f"{score:.4f}",
+                f"{u:.3f}",
+                f"{c:.3f}",
+                f"{l:.3f}",
+                f"{q:.3f}",
+                f"{t:.3f}",
+            )
+        
+        conn.close()
+        console.print(table)
+        
+    except Exception as e:
+        rprint(f"\n[red]✗ Error:[/red] {e}")
+        raise
+
+
 @main.command("process-ghost")
 @click.argument("blog_url")
-@click.option("--max-posts", default=50, help="Maximum number of posts to process")
+@click.option("--max-posts", default=50, type=int, help="Maximum number of posts to process")
+@click.option("--all", "process_all_posts", is_flag=True, help="Process ALL posts (ignores --max-posts)")
 @click.option("--output", default="idearank_results.db", help="SQLite database output path")
 @click.option("--collection", default=None, help="Chroma collection name (default: auto-generated)")
 @click.option("--api-key", envvar="GHOST_API_KEY", help="Ghost Content API key (PREMIUM ONLY)")
@@ -1229,6 +1469,7 @@ def process_ghost_export(
 def process_ghost(
     blog_url: str,
     max_posts: int,
+    process_all_posts: bool,
     output: str,
     collection: Optional[str],
     api_key: Optional[str],
@@ -1241,12 +1482,16 @@ def process_ghost(
     
     Example:
         idearank process-ghost https://blog.example.com --api-key YOUR_KEY
+        idearank process-ghost https://blog.example.com --api-key YOUR_KEY --all
     """
+    # Determine actual max_posts value
+    actual_max_posts = None if process_all_posts else max_posts
+    
     # Show configuration summary
     console.print(Panel.fit(
         f"[bold]Processing Ghost Blog[/bold]\n\n"
         f"Blog URL: {blog_url}\n"
-        f"Max Posts: {max_posts}\n"
+        f"Max Posts: {'ALL' if process_all_posts else max_posts}\n"
         f"Output: {output}\n"
         f"Filter: {filter_query or 'None'}",
         border_style="blue"
@@ -1324,9 +1569,11 @@ def process_ghost(
         
         # Process blog
         rprint("\n[bold]Processing blog...[/bold]")
+        if process_all_posts:
+            rprint("[yellow]⚠[/yellow]  Processing ALL posts - this may take a while!")
         content_source, scores = ghost_pipeline.process_blog(
             blog_url=blog_url,
-            max_posts=max_posts,
+            max_posts=actual_max_posts,
             filter_query=filter_query,
         )
         
@@ -1400,16 +1647,28 @@ def setup():
     cfg.set_youtube_api_key(youtube_key)
     rprint("[green]✓[/green] Saved")
     
-    # Gladia API Key (optional)
-    rprint("\n[bold]Step 2: Gladia Transcription (Optional)[/bold]")
-    rprint("Gladia provides high-quality transcription for videos without captions.")
-    rprint("Get your API key from: https://gladia.io")
-    gladia_key = click.prompt("Gladia API Key (optional, press Enter to skip)", default="", show_default=False)
-    if gladia_key:
-        cfg.set_gladia_api_key(gladia_key)
-        rprint("[green]✓[/green] Saved")
-    else:
-        rprint("[yellow]⊘[/yellow] Skipped (will use YouTube transcripts only)")
+    # Whisper Configuration (optional)
+    rprint("\n[bold]Step 2: Whisper Transcription (Optional)[/bold]")
+    rprint("Configure local Whisper transcription for videos without captions.")
+    rprint("Models: tiny (fastest) < base < small (default) < medium < large (best)")
+    
+    whisper_model = click.prompt(
+        "Whisper Model", 
+        type=click.Choice(["tiny", "base", "small", "medium", "large"]),
+        default="small",
+        show_default=True
+    )
+    cfg.set_whisper_model(whisper_model)
+    rprint(f"[green]✓[/green] Whisper model set to: {whisper_model}")
+    
+    whisper_device = click.prompt(
+        "Whisper Device",
+        type=click.Choice(["cpu", "cuda", "auto"]),
+        default="auto",
+        show_default=True
+    )
+    cfg.set_whisper_device(whisper_device)
+    rprint(f"[green]✓[/green] Whisper device set to: {whisper_device}")
     
     # Chroma mode
     rprint("\n[bold]Step 3: Chroma Vector Storage[/bold]")

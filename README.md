@@ -22,7 +22,10 @@ pip install -e ".[all]"
 ```bash
 # Set up your API keys
 idearank config set-youtube-key YOUR_YOUTUBE_API_KEY
-idearank config set-gladia-key YOUR_GLADIA_API_KEY  # Optional: for transcription
+
+# Optional: Configure Whisper transcription (local, no API key needed)
+idearank config set-whisper-model small  # Options: tiny, base, small, medium, large
+idearank config set-whisper-device auto  # Options: cpu, cuda, auto
 
 # Optional: Set up OpenAI for better embeddings
 export OPENAI_API_KEY=your_key_here
@@ -30,37 +33,85 @@ export OPENAI_API_KEY=your_key_here
 
 ### Process Your Content
 
-#### YouTube Channel
+**Two ways to process content:**
+
+#### Quick Single-Source Processing
+Process one source directly (doesn't save to sources config):
+
 ```bash
+# YouTube (limited to 50 videos)
 idearank process https://youtube.com/@yourchannel --max-videos 50
+
+# YouTube (ALL videos - full pagination)
+idearank process https://youtube.com/@yourchannel --all
+
+# Ghost export (limited)
+idearank process-ghost-export ~/Downloads/blog.ghost.json --max-posts 50
+
+# Ghost export (ALL posts)
+idearank process-ghost-export ~/Downloads/blog.ghost.json --all
+
+# Medium archive (limited)
+idearank process-medium ~/Downloads/medium-export.zip --max-posts 50
+
+# Medium archive (ALL posts)
+idearank process-medium ~/Downloads/medium-export.zip --all
+
+# Each creates its own database (idearank_results.db by default)
 ```
 
-#### Ghost Blog Export
-```bash
-# Export your Ghost blog (Settings → Labs → Export)
-idearank process-ghost-export ~/Downloads/your-blog.ghost.json --max-posts 50
-```
+#### Multi-Source Workflow
+Add multiple sources, then process all together:
 
-#### Twitter Archive
 ```bash
-# Add your Twitter handle or direct archive URL
-idearank source add @yourhandle twitter
+# Add sources with limits (saved to ~/.idearank/sources.json)
+idearank source add https://youtube.com/@channel --max-items 50
+idearank source add ~/Downloads/blog.ghost.json --max-items 100
+
+# Add sources with unlimited processing (ALL content)
+idearank source add https://youtube.com/@bigchannel --all
+idearank source add ~/Downloads/medium-export.zip --all
+idearank source add ~/Downloads/twitter-archive.json --all
+
+# View your sources
+idearank source list
+
+# Process all enabled sources into one database
 idearank process-all
+
+# Creates: idearank_all_content.db with all sources
 ```
 
-#### Process Multiple Sources
-```bash
-# Add sources
-idearank source add https://youtube.com/@channel1 youtube
-idearank source add ~/Downloads/blog.ghost.json ghost-export
-idearank source add @username twitter
+**When to use each:**
+- **Single-source:** Quick analysis, one-off checks, testing
+- **Multi-source:** Cross-source comparison, comprehensive analysis, tracking over time
 
-# Process everything at once
-idearank process-all
-```
+**Pagination & Limits:**
+- By default, commands process 50 items (videos/posts)
+- Use `--all` flag to process **ALL** content with automatic pagination
+- Or set custom limits: `--max-videos 200`, `--max-posts 100`, etc.
+- For multi-source: use `--all` when adding sources for unlimited processing
 
 ### Visualize Results
 
+#### Interactive Web Dashboard (Recommended)
+```bash
+# Install Streamlit dependencies
+pip install "idearank[streamlit]"
+
+# Launch interactive dashboard
+streamlit run streamlit_app.py
+
+# Opens in your browser with:
+# - Overview metrics and charts
+# - Top content rankings
+# - Factor analysis and correlations
+# - Content explorer with search
+# - Source comparison
+# - Trends over time
+```
+
+#### Command-Line Charts
 ```bash
 # Create complete dashboard
 idearank viz dashboard
@@ -74,24 +125,26 @@ idearank viz learning --source-id SOURCE_ID  # Learning trajectory
 
 ## Core Concepts
 
-### The Five Factors
+### The Six Factors
 
-IdeaRank scores content using five factors:
+IdeaRank scores content using six factors:
 
 1. **Uniqueness (U)** - How novel is this content vs. everything else?
 2. **Cohesion (C)** - Does it fit the source's theme or is it random?
 3. **Learning (L)** - Is the source advancing ideas, not repeating?
 4. **Quality (Q)** - Genuine engagement (not just clickbait)
 5. **Trust (T)** - Are claims grounded with citations?
+6. **Density (D)** - Information density and audience fit (human/AI)
 
-**Final Score:** `IR = U^w_U · C^w_C · L^w_L · Q^w_Q · T^w_T`
+**Final Score:** `IR = U^w_U · C^w_C · L^w_L · Q^w_Q · T^w_T · D^w_D`
 
 ### Content Sources
 
 IdeaRank supports multiple content types:
 - **YouTube** - Videos with transcripts
 - **Ghost Blogs** - Blog posts (via export or API)
-- **Twitter** - Tweet archives from community-archive.org
+- **Medium** - Blog archives (ZIP export)
+- **Twitter** - Tweet archives (local JSON file)
 - **More coming** - Easy to add new sources
 
 ## Python API
@@ -181,7 +234,8 @@ pipeline = IdeaRankPipeline(
 ```bash
 idearank config show                          # Show current config
 idearank config set-youtube-key KEY          # Set YouTube API key
-idearank config set-gladia-key KEY           # Set Gladia key
+idearank config set-whisper-model MODEL      # Set Whisper model (tiny/base/small/medium/large)
+idearank config set-whisper-device DEVICE    # Set Whisper device (cpu/cuda/auto)
 idearank config set-chroma-mode local|cloud  # Choose Chroma mode
 idearank config clear                         # Reset configuration
 ```
@@ -200,6 +254,7 @@ idearank source clear                     # Remove all sources
 ```bash
 idearank process CHANNEL_URL              # Process single YouTube channel
 idearank process-ghost-export FILE       # Process Ghost export
+idearank process-medium ARCHIVE.zip      # Process Medium archive
 idearank process-all                     # Process all enabled sources
 ```
 
@@ -223,11 +278,12 @@ from idearank.config import IdeaRankConfig, FactorWeights
 
 config = IdeaRankConfig(
     weights=FactorWeights(
-        uniqueness=0.35,  # Default: emphasize novelty
-        cohesion=0.20,    # Topical consistency
-        learning=0.25,    # Progression over time
-        quality=0.15,     # Engagement quality
+        uniqueness=0.30,  # Default: emphasize novelty
+        cohesion=0.18,    # Topical consistency
+        learning=0.22,    # Progression over time
+        quality=0.13,     # Engagement quality
         trust=0.05,       # Citation quality
+        density=0.12,     # Information density
     )
 )
 ```
@@ -255,9 +311,46 @@ config.quality.cr_weight = 0.5
 config.trust.lambda1 = 0.4  # Citations
 config.trust.lambda2 = 0.3  # Source diversity
 config.trust.lambda3 = 0.3  # Corrections
+
+# Density: Audience optimization
+config.density.audience = "human"  # or "ai" or "balanced" (default)
+config.density.citation_density_weight = 0.25
+config.density.concept_diversity_weight = 0.25
+config.density.information_efficiency_weight = 0.25
+config.density.explicitness_weight = 0.25
 ```
 
 ## Advanced Features
+
+### Audience Optimization (Density Factor)
+
+The Density factor adapts to your target audience:
+
+**Human-optimized:**
+```python
+config.density.audience = "human"
+# Favors: Dense, punchy content that assumes context
+# Best for: Blogs, essays, Twitter threads
+```
+
+**AI-optimized:**
+```python
+config.density.audience = "ai"
+# Favors: Explicit, self-contained content with full context
+# Best for: RAG systems, AI training data, documentation
+```
+
+**Balanced (default):**
+```python
+config.density.audience = "balanced"
+# Optimizes for both human and AI readers
+# Best for: General content, mixed audiences
+```
+
+**Why it matters:**
+- Humans prefer concise, contextual content (high density, low explicitness)
+- AIs prefer comprehensive, explicit content (moderate density, high explicitness)
+- The Density factor scores content based on your target audience
 
 ### Entity-Idea Citation Parsing
 
@@ -389,13 +482,81 @@ LIMIT 10;
 
 **Optional:**
 - openai (better embeddings)
-- spacy (citation parsing)
+- spacy + language model (enhanced citation parsing - see [SPACY_SETUP.md](SPACY_SETUP.md))
 - matplotlib, pandas (visualizations)
 
 **External APIs:**
 - YouTube Data API v3 (for YouTube content)
-- Gladia API (for transcription)
 - Chroma Cloud (optional, for cloud vector storage)
+
+**Local Services:**
+- faster-whisper (GPU-accelerated local transcription, no API key needed)
+- yt-dlp (for audio download and subtitle extraction)
+
+## Transcription
+
+IdeaRank uses a **three-tier transcription strategy** for YouTube videos:
+
+1. **YouTube Transcript API** (free, instant) - tries built-in captions first
+2. **yt-dlp subtitle extraction** (free, instant) - downloads native subtitles if available
+3. **faster-whisper** (local, GPU-accelerated) - transcribes audio as fallback
+
+### Configuration
+
+```bash
+# Set Whisper model (trade-off between speed and quality)
+idearank config set-whisper-model small  # Default, good balance
+
+# Model options (from fastest to best):
+# - tiny:   ~1GB RAM, fastest
+# - base:   ~1GB RAM, fast
+# - small:  ~2GB RAM, balanced (default)
+# - medium: ~5GB RAM, good quality
+# - large:  ~10GB RAM, best quality
+
+# Set device (auto uses GPU if available)
+idearank config set-whisper-device auto  # Default
+idearank config set-whisper-device cuda  # Force GPU
+idearank config set-whisper-device cpu   # Force CPU
+```
+
+### Requirements
+
+```bash
+# Install ffmpeg (required for audio extraction)
+# macOS:
+brew install ffmpeg
+
+# Ubuntu/Debian:
+sudo apt-get install ffmpeg
+
+# Windows:
+# Download from https://ffmpeg.org/download.html
+```
+
+The transcription pipeline **automatically caches** all transcripts in SQLite, so videos are never transcribed twice.
+
+## Streamlit Dashboard
+
+For interactive data exploration, use the Streamlit web interface:
+
+```bash
+# Install Streamlit extras
+pip install "idearank[streamlit]"
+
+# Launch dashboard
+streamlit run streamlit_app.py
+```
+
+**Features:**
+- 📈 Overview metrics and distribution charts
+- 🎯 Top content rankings with factor breakdowns
+- 📊 Factor correlation analysis
+- 🔍 Interactive content explorer with search
+- 🏆 Multi-source comparison
+- 📉 Trends and time-series analysis
+
+The dashboard automatically finds all `.db` files in the current directory and lets you explore them interactively in your browser.
 
 ## Development
 

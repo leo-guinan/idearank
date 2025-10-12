@@ -42,14 +42,14 @@ class YouTubePipeline:
     def process_channel(
         self,
         channel_url: str,
-        max_videos: int = 50,
+        max_videos: Optional[int] = 50,
         force_refresh: bool = False,
     ) -> tuple[ContentSource, dict]:
         """Process entire YouTube channel.
         
         Args:
             channel_url: YouTube channel URL (e.g., youtube.com/@username)
-            max_videos: Maximum number of videos to process
+            max_videos: Maximum number of videos to process (None = all videos)
             force_refresh: If True, re-fetch even if in database
             
         Returns:

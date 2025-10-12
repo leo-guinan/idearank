@@ -34,7 +34,8 @@ class CLIConfig:
         else:
             return {
             "youtube_api_key": None,
-            "gladia_api_key": None,
+            "whisper_model": "small",  # tiny, base, small, medium, large
+            "whisper_device": "auto",  # cpu, cuda, auto
             "chroma_mode": "local",  # "local" or "cloud"
             "chroma_cloud_api_key": None,
             "chroma_cloud_tenant": None,
@@ -57,15 +58,30 @@ class CLIConfig:
         """Get YouTube API key."""
         return self._config.get("youtube_api_key")
     
-    # Gladia API Key
-    def set_gladia_api_key(self, api_key: str) -> None:
-        """Set Gladia API key for transcription."""
-        self._config["gladia_api_key"] = api_key
+    # Whisper Configuration
+    def set_whisper_model(self, model: str) -> None:
+        """Set Whisper model size (tiny, base, small, medium, large)."""
+        valid_models = ["tiny", "base", "small", "medium", "large"]
+        if model not in valid_models:
+            raise ValueError(f"Model must be one of: {', '.join(valid_models)}")
+        self._config["whisper_model"] = model
         self._save_config()
     
-    def get_gladia_api_key(self) -> Optional[str]:
-        """Get Gladia API key."""
-        return self._config.get("gladia_api_key")
+    def get_whisper_model(self) -> str:
+        """Get Whisper model size."""
+        return self._config.get("whisper_model", "small")
+    
+    def set_whisper_device(self, device: str) -> None:
+        """Set Whisper device (cpu, cuda, auto)."""
+        valid_devices = ["cpu", "cuda", "auto"]
+        if device not in valid_devices:
+            raise ValueError(f"Device must be one of: {', '.join(valid_devices)}")
+        self._config["whisper_device"] = device
+        self._save_config()
+    
+    def get_whisper_device(self) -> str:
+        """Get Whisper device."""
+        return self._config.get("whisper_device", "auto")
     
     # Chroma Mode
     def set_chroma_mode(self, mode: Literal["local", "cloud"]) -> None:
@@ -130,8 +146,6 @@ class CLIConfig:
         # Mask API keys
         if config.get("youtube_api_key"):
             config["youtube_api_key"] = self._mask_key(config["youtube_api_key"])
-        if config.get("gladia_api_key"):
-            config["gladia_api_key"] = self._mask_key(config["gladia_api_key"])
         if config.get("chroma_cloud_api_key"):
             config["chroma_cloud_api_key"] = self._mask_key(config["chroma_cloud_api_key"])
         
@@ -150,7 +164,8 @@ class CLIConfig:
         """Clear all configuration."""
         self._config = {
             "youtube_api_key": None,
-            "gladia_api_key": None,
+            "whisper_model": "small",
+            "whisper_device": "auto",
             "chroma_mode": "local",
             "chroma_cloud_api_key": None,
             "chroma_cloud_tenant": None,

@@ -13,7 +13,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-ContentType = Literal["youtube", "ghost_export", "ghost_api", "unknown"]
+ContentType = Literal["youtube", "ghost_export", "ghost_api", "medium", "twitter", "unknown"]
 
 
 @dataclass
@@ -39,24 +39,31 @@ class ContentSource:
         """Auto-detect content source type.
         
         Args:
-            url_or_path: URL, file path, or Twitter handle
+            url_or_path: URL or file path
             
         Returns:
             ContentType
         """
-        # Check if it's a Twitter handle or archive URL first
-        if ContentSource._is_twitter_handle(url_or_path):
-            return "twitter"
-        
-        # Check if it's a Twitter archive URL
-        if ContentSource._is_twitter_archive_url(url_or_path):
-            return "twitter"
-        
         # Check if it's a file
         if Path(url_or_path).exists():
-            # Check file extension
+            # Check file extension and name patterns
+            filename_lower = url_or_path.lower()
+            
+            # Twitter archive JSON files
+            if filename_lower.endswith('.json') and any(indicator in filename_lower for indicator in ['twitter', 'tweet', 'archive']):
+                return "twitter"
+            
+            # Ghost export files
             if url_or_path.endswith('.json') or '.ghost.' in url_or_path:
                 return "ghost_export"
+            
+            # Medium archives (ZIP)
+            if url_or_path.endswith('.zip') and 'medium' in filename_lower:
+                return "medium"
+            elif url_or_path.endswith('.zip'):
+                # Default ZIP files to Medium
+                return "medium"
+            
             return "unknown"
         
         # Check if it's a URL
@@ -70,53 +77,6 @@ class ContentSource:
             return "ghost_api"
         
         return "unknown"
-    
-    @classmethod
-    def _is_twitter_handle(cls, text: str) -> bool:
-        """Check if text looks like a Twitter handle.
-        
-        Args:
-            text: Text to check
-            
-        Returns:
-            True if it looks like a Twitter handle
-        """
-        import re
-        
-        if not text:
-            return False
-        
-        # Clean the text
-        clean = text.lstrip('@').strip()
-        
-        # Check format (alphanumeric, underscore, max 15 chars)
-        return bool(re.match(r'^[A-Za-z0-9_]{1,15}$', clean))
-    
-    @classmethod
-    def _is_twitter_archive_url(cls, text: str) -> bool:
-        """Check if text looks like a Twitter archive URL.
-        
-        Args:
-            text: Text to check
-            
-        Returns:
-            True if it looks like a Twitter archive URL
-        """
-        if not text or not text.startswith('http'):
-            return False
-        
-        # Check for common patterns in Twitter archive URLs
-        archive_indicators = [
-            'archive.json',
-            'tweets.js',
-            'tweets.csv',
-            '/storage/',
-            'supabase.co',
-            'twitter-archive',
-        ]
-        
-        text_lower = text.lower()
-        return any(indicator in text_lower for indicator in archive_indicators)
     
     @classmethod
     def create(
@@ -152,8 +112,11 @@ class ContentSource:
                     name = url_or_path
             elif content_type == "ghost_export":
                 name = Path(url_or_path).stem
+            elif content_type == "medium":
+                name = Path(url_or_path).stem.replace('medium-export', '').replace('-', ' ').strip()
             elif content_type == "twitter":
-                name = f"@{url_or_path.lstrip('@')}"
+                # Extract name from file
+                name = Path(url_or_path).stem
             else:
                 name = url_or_path
         

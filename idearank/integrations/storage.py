@@ -94,6 +94,7 @@ if SQLALCHEMY_AVAILABLE:
         learning_score = Column(Float)
         quality_score = Column(Float)
         trust_score = Column(Float)
+        density_score = Column(Float)
         
         # Factor components (as JSON for debugging)
         uniqueness_components = Column(JSON)
@@ -101,6 +102,7 @@ if SQLALCHEMY_AVAILABLE:
         learning_components = Column(JSON)
         quality_components = Column(JSON)
         trust_components = Column(JSON)
+        density_components = Column(JSON)
         
         # Configuration used
         weights = Column(JSON)
@@ -253,11 +255,13 @@ class SQLiteStorage:
             learning_score=score_result.learning.score,
             quality_score=score_result.quality.score,
             trust_score=score_result.trust.score,
+            density_score=score_result.density.score,
             uniqueness_components=score_result.uniqueness.components,
             cohesion_components=score_result.cohesion.components,
             learning_components=score_result.learning.components,
             quality_components=score_result.quality.components,
             trust_components=score_result.trust.components,
+            density_components=score_result.density.components,
             weights=score_result.weights_used,
         )
         

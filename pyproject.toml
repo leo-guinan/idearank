@@ -34,7 +34,8 @@ chroma = [
 youtube = [
     "google-api-python-client>=2.0.0",
     "youtube-transcript-api>=0.6.0",
-    "requests>=2.28.0",  # For API calls (Gladia, etc.)
+    "yt-dlp>=2023.0.0",  # For downloading audio and extracting subtitles
+    "faster-whisper>=0.9.0",  # Local Whisper transcription (GPU-accelerated)
 ]
 embeddings = [
     "sentence-transformers>=2.0.0",  # Local embeddings, no API key needed
@@ -42,6 +43,10 @@ embeddings = [
 viz = [
     "matplotlib>=3.5.0",
     "pandas>=1.5.0",
+]
+streamlit = [
+    "streamlit>=1.28.0",
+    "plotly>=5.14.0",
 ]
 cli = [
     "click>=8.0.0",
@@ -53,7 +58,7 @@ pipeline = [
     "python-dotenv>=1.0.0",
 ]
 all = [
-    "idearank[dev,openai,faiss,ml,nlp,chroma,youtube,cli,embeddings,viz,pipeline]",
+    "idearank[dev,openai,faiss,ml,nlp,chroma,youtube,cli,embeddings,viz,streamlit,pipeline]",
 ]
 
 [project.scripts]

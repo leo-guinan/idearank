@@ -1,6 +1,6 @@
 """Main IdeaRank scoring engine.
 
-Combines all factors (U, C, L, Q, T) to produce content item and content source scores.
+Combines all factors (U, C, L, Q, T, D) to produce content item and content source scores.
 """
 
 from dataclasses import dataclass
@@ -17,6 +17,7 @@ from idearank.factors import (
     TrustFactor,
     FactorResult,
 )
+from idearank.factors.density import DensityFactor
 
 
 @dataclass
@@ -32,6 +33,7 @@ class IdeaRankScore:
     learning: FactorResult
     quality: FactorResult
     trust: FactorResult
+    density: FactorResult
     
     # Metadata
     weights_used: dict[str, float]
@@ -72,7 +74,7 @@ class IdeaRankScore:
 class IdeaRankScorer:
     """Computes IdeaRank scores for content items.
     
-    IR(item,t) = U^w_U · C^w_C · L^w_L · Q^w_Q · T^w_T
+    IR(item,t) = U^w_U · C^w_C · L^w_L · Q^w_Q · T^w_T · D^w_D
     """
     
     def __init__(self, config: IdeaRankConfig):
@@ -86,6 +88,7 @@ class IdeaRankScorer:
         self.learning_factor = LearningFactor(config.learning)
         self.quality_factor = QualityFactor(config.quality)
         self.trust_factor = TrustFactor(config.trust)
+        self.density_factor = DensityFactor(config.density)
     
     def score_content(
         self,
@@ -111,13 +114,14 @@ class IdeaRankScorer:
         learning = self.learning_factor.compute(content_item, content_source, context)
         quality = self.quality_factor.compute(content_item, content_source, context)
         trust = self.trust_factor.compute(content_item, content_source, context)
+        density = self.density_factor.compute(content_item, content_source, context)
         
         # Check gates
         passes_u_gate = uniqueness.score >= self.config.uniqueness.min_threshold
         passes_l_gate = learning.score >= self.config.learning.min_threshold
         passes_gates = passes_u_gate and passes_l_gate
         
-        # Combine with multiplicative weights: IR = U^w_U · C^w_C · L^w_L · Q^w_Q · T^w_T
+        # Combine with multiplicative weights: IR = U^w_U · C^w_C · L^w_L · Q^w_Q · T^w_T · D^w_D
         weights = self.config.weights
         
         # Use geometric mean (product of powered factors)
@@ -126,7 +130,8 @@ class IdeaRankScorer:
             (cohesion.score ** weights.cohesion) *
             (learning.score ** weights.learning) *
             (quality.score ** weights.quality) *
-            (trust.score ** weights.trust)
+            (trust.score ** weights.trust) *
+            (density.score ** weights.density)
         )
         
         # If gates are not passed, apply penalty (optional - for top-tier filtering)
@@ -143,12 +148,14 @@ class IdeaRankScorer:
             learning=learning,
             quality=quality,
             trust=trust,
+            density=density,
             weights_used={
                 'uniqueness': weights.uniqueness,
                 'cohesion': weights.cohesion,
                 'learning': weights.learning,
                 'quality': weights.quality,
                 'trust': weights.trust,
+                'density': weights.density,
             },
             passes_gates=passes_gates,
         )
@@ -215,7 +222,11 @@ class ContentSourceScorer:
         # Determine time window
         if end_time is None:
             if content_source.content_items:
-                end_time = max(item.published_at for item in content_source.content_items)
+                # Get the maximum published_at datetime from content items
+                published_dates = [item.published_at for item in content_source.content_items if item.published_at]
+                if not published_dates:
+                    raise ValueError("Content source has no valid published_at dates")
+                end_time = max(published_dates)
             else:
                 raise ValueError("Content source has no items and no end_time provided")
         
