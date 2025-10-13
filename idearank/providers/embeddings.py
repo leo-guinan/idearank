@@ -162,12 +162,6 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     
     def embed(self, text: str) -> Embedding:
         """Generate embedding using OpenAI API."""
-        # Truncate to avoid token limit (8191 tokens ≈ 32,000 chars)
-        max_chars = 30000
-        if len(text) > max_chars:
-            logger.warning(f"Truncating text from {len(text)} to {max_chars} chars for OpenAI")
-            text = text[:max_chars]
-        
         response = self.client.embeddings.create(
             model=self._model,
             input=text,
@@ -177,20 +171,68 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         return Embedding(vector=vector, model=self.model_name)
     
     def embed_batch(self, texts: List[str]) -> List[Embedding]:
-        """Generate embeddings for batch (more efficient)."""
-        # Truncate long texts to avoid token limit
-        max_chars = 30000
-        truncated_texts = []
-        for text in texts:
-            if len(text) > max_chars:
-                logger.warning(f"Truncating text from {len(text)} to {max_chars} chars for OpenAI")
-                truncated_texts.append(text[:max_chars])
-            else:
-                truncated_texts.append(text)
+        """Generate embeddings for batch with intelligent batching to respect token limits.
         
+        OpenAI has a per-text limit of 8,192 tokens and a batch limit of ~50,000 tokens.
+        We'll batch intelligently to stay under these limits.
+        """
+        from idearank.utils.chunking import estimate_tokens
+        
+        MAX_TOKENS_PER_TEXT = 8000  # Per-text limit (8,192 with buffer)
+        MAX_TOKENS_PER_REQUEST = 45000  # Batch limit (conservative)
+        
+        all_embeddings = []
+        current_batch = []
+        current_batch_tokens = 0
+        
+        for i, text in enumerate(texts):
+            text_tokens = estimate_tokens(text)
+            
+            # If this single text exceeds the per-text limit, it needs to be handled separately
+            if text_tokens > MAX_TOKENS_PER_TEXT:
+                # Process current batch first
+                if current_batch:
+                    batch_embeddings = self._embed_batch_internal(current_batch)
+                    all_embeddings.extend(batch_embeddings)
+                    current_batch = []
+                    current_batch_tokens = 0
+                
+                # This text is too large - it should have been chunked earlier
+                logger.error(
+                    f"Text {i} has {text_tokens} tokens (>{MAX_TOKENS_PER_TEXT}). "
+                    "This should have been chunked before embedding. Skipping."
+                )
+                # Return a zero embedding as placeholder
+                all_embeddings.append(Embedding(
+                    vector=np.zeros(self.dimension, dtype=np.float32),
+                    model=self.model_name
+                ))
+                continue
+            
+            # Check if adding this text would exceed the limit
+            if current_batch_tokens + text_tokens > MAX_TOKENS_PER_REQUEST:
+                # Process current batch
+                batch_embeddings = self._embed_batch_internal(current_batch)
+                all_embeddings.extend(batch_embeddings)
+                current_batch = [text]
+                current_batch_tokens = text_tokens
+            else:
+                # Add to current batch
+                current_batch.append(text)
+                current_batch_tokens += text_tokens
+        
+        # Process final batch
+        if current_batch:
+            batch_embeddings = self._embed_batch_internal(current_batch)
+            all_embeddings.extend(batch_embeddings)
+        
+        return all_embeddings
+    
+    def _embed_batch_internal(self, texts: List[str]) -> List[Embedding]:
+        """Internal method to call OpenAI API for a batch that fits within limits."""
         response = self.client.embeddings.create(
             model=self._model,
-            input=truncated_texts,
+            input=texts,
         )
         
         return [

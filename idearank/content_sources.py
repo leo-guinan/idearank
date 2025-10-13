@@ -60,9 +60,14 @@ class ContentSource:
             # Medium archives (ZIP)
             if url_or_path.endswith('.zip') and 'medium' in filename_lower:
                 return "medium"
-            elif url_or_path.endswith('.zip'):
-                # Default ZIP files to Medium
-                return "medium"
+            
+            # Twitter archives (ZIP) - check for twitter indicators
+            if url_or_path.endswith('.zip') and any(indicator in filename_lower for indicator in ['twitter', 'tweet', 'archive']):
+                return "twitter"
+            
+            # For other ZIP files, default to unknown rather than medium
+            if url_or_path.endswith('.zip'):
+                return "unknown"
             
             return "unknown"
         

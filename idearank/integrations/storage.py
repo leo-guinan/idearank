@@ -123,6 +123,22 @@ if SQLALCHEMY_AVAILABLE:
         content_count = Column(Integer)
         window_days = Column(Integer)
         crystallization_detected = Column(Boolean)
+    
+    class DocumentChunkRecord(Base):
+        """Document chunks for long-form content."""
+        __tablename__ = 'document_chunks'
+        
+        id = Column(String, primary_key=True)  # {parent_id}_chunk_{index}
+        parent_id = Column(String, index=True)  # FK to content_items.id
+        
+        chunk_index = Column(Integer)  # Position in sequence (0-based)
+        total_chunks = Column(Integer)  # Total chunks for this parent
+        
+        text = Column(Text)  # Chunk content
+        char_start = Column(Integer)  # Offset in original document
+        char_end = Column(Integer)  # Offset in original document
+        
+        created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class SQLiteStorage:
@@ -306,6 +322,115 @@ class SQLiteStorage:
             .limit(limit)
             .all()
         )
+    
+    def save_document_chunks(self, chunks: List[Any]) -> None:
+        """Save document chunks to database.
+        
+        Args:
+            chunks: List of DocumentChunk objects from chunking.py
+        """
+        from idearank.integrations.storage import DocumentChunkRecord
+        
+        for chunk in chunks:
+            record = DocumentChunkRecord(
+                id=chunk.chunk_id,
+                parent_id=chunk.parent_id,
+                chunk_index=chunk.chunk_index,
+                total_chunks=chunk.total_chunks,
+                text=chunk.text,
+                char_start=chunk.char_start,
+                char_end=chunk.char_end,
+            )
+            self.session.merge(record)
+        
+        self.session.commit()
+        logger.debug(f"Saved {len(chunks)} chunks for parent: {chunks[0].parent_id if chunks else 'N/A'}")
+    
+    def save_semantic_structure(self, content_id: str, semantic_structure: Any) -> None:
+        """Save semantic structure (actors, events, changes) to database as JSON.
+        
+        Args:
+            content_id: ID of the content item
+            semantic_structure: SemanticStructure object from semantic_extractor.py
+        """
+        import json
+        
+        # Convert semantic structure to JSON-serializable dict
+        structure_data = {
+            "content_id": semantic_structure.content_id,
+            "summary": semantic_structure.summary,
+            "actors": [
+                {
+                    "name": actor.name,
+                    "type": actor.type,
+                    "description": actor.description,
+                    "aliases": actor.aliases
+                }
+                for actor in semantic_structure.actors
+            ],
+            "events": [
+                {
+                    "description": event.description,
+                    "actors": event.actors,
+                    "timestamp": event.timestamp,
+                    "context": event.context
+                }
+                for event in semantic_structure.events
+            ],
+            "changes": [
+                {
+                    "actor": change.actor,
+                    "before_state": change.before_state,
+                    "after_state": change.after_state,
+                    "trigger": change.trigger,
+                    "context": change.context
+                }
+                for change in semantic_structure.changes
+            ],
+            "metadata": semantic_structure.metadata
+        }
+        
+        # For now, store as JSON in the content_item body_metadata field
+        # In a full implementation, you'd want a dedicated semantic_structure table
+        existing = self.session.query(ContentItemRecord).filter_by(id=content_id).first()
+        if existing:
+            existing.body_metadata = json.dumps(structure_data)
+            self.session.commit()
+            logger.debug(f"Saved semantic structure for: {content_id}")
+        else:
+            logger.warning(f"Content item {content_id} not found, cannot save semantic structure")
+    
+    def get_document_chunks(self, parent_id: str) -> List['DocumentChunkRecord']:
+        """Get all chunks for a parent document.
+        
+        Args:
+            parent_id: ID of the parent content item
+            
+        Returns:
+            List of DocumentChunkRecord objects, ordered by chunk_index
+        """
+        from idearank.integrations.storage import DocumentChunkRecord
+        
+        return (
+            self.session.query(DocumentChunkRecord)
+            .filter_by(parent_id=parent_id)
+            .order_by(DocumentChunkRecord.chunk_index)
+            .all()
+        )
+    
+    def has_chunks(self, parent_id: str) -> bool:
+        """Check if a parent document has been chunked.
+        
+        Args:
+            parent_id: ID of the parent content item
+            
+        Returns:
+            True if chunks exist
+        """
+        from idearank.integrations.storage import DocumentChunkRecord
+        
+        count = self.session.query(DocumentChunkRecord).filter_by(parent_id=parent_id).count()
+        return count > 0
     
     def close(self):
         """Close database session."""

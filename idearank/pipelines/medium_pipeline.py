@@ -31,6 +31,7 @@ class MediumPipeline:
         topic_provider: TopicModelProvider,
         neighborhood_provider: NeighborhoodProvider,
         config: Optional[IdeaRankConfig] = None,
+        semantic_extractor = None,
     ):
         """
         Initialize Medium pipeline.
@@ -41,6 +42,7 @@ class MediumPipeline:
             topic_provider: Provider for topic modeling
             neighborhood_provider: Provider for finding similar content
             config: Optional IdeaRank configuration
+            semantic_extractor: Optional semantic extractor for content decomposition
         """
         self.storage = storage
         self.medium_client = MediumArchiveClient()
@@ -54,6 +56,8 @@ class MediumPipeline:
             embedding_provider=embedding_provider,
             topic_provider=topic_provider,
             neighborhood_provider=neighborhood_provider,
+            storage=storage,  # Pass storage for chunk/semantic persistence
+            semantic_extractor=semantic_extractor,  # For semantic decomposition
         )
         
     def process_archive(
@@ -258,6 +262,7 @@ def process_medium_archive(
     limit: Optional[int] = None,
     skip_drafts: bool = True,
     config: Optional[IdeaRankConfig] = None,
+    semantic_extractor = None,
 ) -> tuple[ContentSource, Dict]:
     """
     Convenience function to process a Medium archive.
@@ -271,6 +276,7 @@ def process_medium_archive(
         limit: Optional limit on posts
         skip_drafts: Whether to skip drafts
         config: Optional IdeaRank config
+        semantic_extractor: Optional semantic extractor for content decomposition
         
     Returns:
         Tuple of (content source, statistics)
@@ -281,6 +287,7 @@ def process_medium_archive(
         topic_provider=topic_provider,
         neighborhood_provider=neighborhood_provider,
         config=config,
+        semantic_extractor=semantic_extractor,
     )
     
     return pipeline.process_archive(

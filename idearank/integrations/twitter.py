@@ -5,6 +5,7 @@ Processes Twitter archive JSON files for IdeaRank analysis.
 
 import json
 import logging
+import zipfile
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime
@@ -71,15 +72,16 @@ class TwitterArchiveParser:
         self.logger = logging.getLogger(__name__)
     
     def load_archive(self, file_path: str) -> TwitterArchive:
-        """Load a Twitter archive from a JSON file.
+        """Load a Twitter archive from a JSON file or ZIP archive.
         
         Supports multiple formats:
         - Official Twitter archive format (tweets.js or tweet.js)
         - Community archive format (archive.json)
         - Simple JSON array of tweets
+        - ZIP archives containing JSON files
         
         Args:
-            file_path: Path to the JSON file
+            file_path: Path to the JSON file or ZIP archive
             
         Returns:
             TwitterArchive with parsed posts
@@ -91,11 +93,16 @@ class TwitterArchiveParser:
         
         self.logger.info(f"Loading Twitter archive from: {file_path}")
         
-        with open(file_path, 'r', encoding='utf-8') as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON file: {e}")
+        # Handle ZIP files
+        if file_path.suffix.lower() == '.zip':
+            data = self._load_from_zip(file_path)
+        else:
+            # Handle JSON files
+            with open(file_path, 'r', encoding='utf-8') as f:
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"Invalid JSON file: {e}")
         
         # Detect format and parse
         posts, username = self._parse_archive_format(data, file_path)
@@ -118,6 +125,94 @@ class TwitterArchiveParser:
         
         self.logger.info(f"Loaded {len(posts)} posts from @{username}")
         return archive
+    
+    def _load_from_zip(self, zip_path: Path) -> Any:
+        """Load Twitter data from a ZIP archive.
+        
+        Args:
+            zip_path: Path to ZIP file
+            
+        Returns:
+            Parsed JSON data
+        """
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zip_file:
+                # Look for common Twitter archive files
+                possible_files = [
+                    'tweets.js',
+                    'tweet.js', 
+                    'archive.json',
+                    'data/tweets.js',
+                    'data/tweet.js',
+                    'data/archive.json',
+                    'Twitter Archive/data/tweets.js',
+                    'Twitter Archive/data/tweet.js'
+                ]
+                
+                json_file = None
+                for possible_file in possible_files:
+                    if possible_file in zip_file.namelist():
+                        json_file = possible_file
+                        break
+                
+                if not json_file:
+                    # List available files for debugging
+                    available_files = zip_file.namelist()
+                    raise ValueError(f"No Twitter JSON file found in ZIP. Available files: {available_files[:10]}")
+                
+                # Read the JSON file from ZIP
+                with zip_file.open(json_file) as f:
+                    content = f.read()
+                    
+                    # Try different encodings
+                    for encoding in ['utf-8', 'utf-8-sig', 'latin1', 'cp1252']:
+                        try:
+                            text = content.decode(encoding)
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    else:
+                        raise ValueError("Could not decode ZIP file content with any supported encoding")
+                    
+                    # Parse JSON - handle both pure JSON and JavaScript-wrapped JSON
+                    try:
+                        # Try parsing as pure JSON first
+                        data = json.loads(text)
+                        self.logger.info(f"Successfully loaded {json_file} from ZIP archive")
+                        return data
+                    except json.JSONDecodeError:
+                        # Try parsing as JavaScript-wrapped JSON (Twitter archive format)
+                        try:
+                            # Remove JavaScript wrapper and extract JSON
+                            if text.strip().startswith('window.YTD.tweets.part0 = '):
+                                # Extract JSON array from JavaScript assignment
+                                json_start = text.find('[')
+                                json_end = text.rfind(']') + 1
+                                if json_start != -1 and json_end != -1:
+                                    json_content = text[json_start:json_end]
+                                    data = json.loads(json_content)
+                                    self.logger.info(f"Successfully loaded {json_file} from ZIP archive (JavaScript format)")
+                                    return data
+                            
+                            # Try other JavaScript patterns
+                            if ' = [' in text and text.strip().endswith(';'):
+                                # Find the array content
+                                array_start = text.find('[')
+                                array_end = text.rfind(']') + 1
+                                if array_start != -1 and array_end != -1:
+                                    array_content = text[array_start:array_end]
+                                    data = json.loads(array_content)
+                                    self.logger.info(f"Successfully loaded {json_file} from ZIP archive (JavaScript array format)")
+                                    return data
+                            
+                            raise ValueError(f"Could not extract JSON from JavaScript file {json_file}")
+                        except (json.JSONDecodeError, ValueError) as e:
+                            raise ValueError(f"Invalid JSON in ZIP file {json_file}: {e}")
+                        
+        except zipfile.BadZipFile:
+            raise ValueError("Invalid ZIP file format")
+        except Exception as e:
+            raise ValueError(f"Error reading ZIP file: {e}")
     
     def _parse_archive_format(self, data: Any, file_path: Path) -> tuple[List[TwitterPost], str]:
         """Detect and parse the archive format.

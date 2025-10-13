@@ -35,12 +35,25 @@ class IdeaRankPipeline:
         embedding_provider: EmbeddingProvider,
         topic_provider: TopicModelProvider,
         neighborhood_provider: NeighborhoodProvider,
+        storage=None,  # Optional SQLiteStorage for chunk/semantic persistence
+        semantic_extractor=None,  # Optional SemanticExtractor for decomposing long content
     ):
-        """Initialize pipeline with config and providers."""
+        """Initialize pipeline with config and providers.
+        
+        Args:
+            config: IdeaRank configuration
+            embedding_provider: Provider for generating embeddings
+            topic_provider: Provider for topic modeling
+            neighborhood_provider: Provider for similarity search
+            storage: Optional SQLiteStorage instance for saving document chunks
+            semantic_extractor: Optional SemanticExtractor for decomposing long content
+        """
         self.config = config
         self.embedding_provider = embedding_provider
         self.topic_provider = topic_provider
         self.neighborhood_provider = neighborhood_provider
+        self.storage = storage
+        self.semantic_extractor = semantic_extractor
         
         # Initialize scorers
         self.content_scorer = IdeaRankScorer(config)
@@ -48,13 +61,42 @@ class IdeaRankPipeline:
         self.network_computer = KnowledgeRankComputer(config.network)
     
     def process_content_item(self, content_item: ContentItem) -> ContentItem:
-        """Add embeddings and topics to a content item.
+        """Add embeddings and topics to a content item using semantic decomposition.
         
         Modifies content item in-place and returns it.
         """
         if content_item.embedding is None:
-            logger.debug(f"Generating embedding for content item {content_item.id}")
-            content_item.embedding = self.embedding_provider.embed(content_item.full_text)
+            logger.debug(f"Generating semantic embedding for content item {content_item.id}")
+            
+            # Use semantic extraction for consistency
+            semantic_structure = self._extract_semantic_structure(content_item)
+            
+            # Save semantic structure to storage if available
+            if hasattr(self, 'storage') and self.storage:
+                self.storage.save_semantic_structure(content_item.id, semantic_structure)
+            
+            # Get embeddable units and embed them
+            embeddable_units = semantic_structure.get_embeddable_units()
+            unit_texts = [unit_text for _, _, unit_text in embeddable_units]
+            
+            if unit_texts:
+                unit_embeddings = self.embedding_provider.embed_batch(unit_texts)
+                
+                # Average unit embeddings to get item embedding
+                import numpy as np
+                unit_vectors = [emb.vector for emb in unit_embeddings]
+                avg_vector = np.mean(unit_vectors, axis=0)
+                content_item.embedding = type(unit_embeddings[0])(
+                    vector=avg_vector,
+                    model=unit_embeddings[0].model
+                )
+                
+                logger.info(
+                    f"Created embedding from {len(embeddable_units)} semantic units "
+                    f"({len(semantic_structure.actors)} actors, "
+                    f"{len(semantic_structure.events)} events, "
+                    f"{len(semantic_structure.changes)} changes)"
+                )
         
         if content_item.topic_mixture is None:
             logger.debug(f"Generating topics for content item {content_item.id}")
@@ -63,15 +105,75 @@ class IdeaRankPipeline:
         return content_item
     
     def process_content_batch(self, content_items: List[ContentItem]) -> List[ContentItem]:
-        """Process multiple content items efficiently."""
+        """Process multiple content items efficiently with semantic decomposition.
+        
+        All content is decomposed into semantic units (actors, events, changes) for:
+        - Consistent structure across all content
+        - Better embeddings (semantic units vs raw text)
+        - Knowledge graph readiness
+        - Simpler code (one path, not two)
+        """
         # Generate embeddings for items that don't have them
         items_needing_embeddings = [item for item in content_items if item.embedding is None]
         if items_needing_embeddings:
-            logger.info(f"Generating embeddings for {len(items_needing_embeddings)} content items")
-            texts = [item.full_text for item in items_needing_embeddings]
-            embeddings = self.embedding_provider.embed_batch(texts)
-            for item, embedding in zip(items_needing_embeddings, embeddings):
-                item.embedding = embedding
+            logger.info(f"Generating semantic embeddings for {len(items_needing_embeddings)} content items")
+            
+            all_semantic_units = []
+            unit_to_item_map = {}  # Maps semantic unit index to parent item index
+            
+            # Decompose ALL content into semantic units
+            for i, item in enumerate(items_needing_embeddings):
+                logger.debug(f"Extracting semantic structure from {item.id}")
+                
+                # Use semantic extraction for all content
+                semantic_structure = self._extract_semantic_structure(item)
+                
+                # Save semantic structure to storage if available
+                if hasattr(self, 'storage') and self.storage:
+                    self.storage.save_semantic_structure(item.id, semantic_structure)
+                
+                # Get embeddable units
+                embeddable_units = semantic_structure.get_embeddable_units()
+                
+                # Add semantic units for embedding
+                for unit_type, unit_id, unit_text in embeddable_units:
+                    unit_idx = len(all_semantic_units)
+                    all_semantic_units.append((unit_type, unit_id, unit_text))
+                    unit_to_item_map[unit_idx] = i
+                
+                logger.info(
+                    f"Extracted {len(embeddable_units)} semantic units from {item.id}: "
+                    f"{len(semantic_structure.actors)} actors, "
+                    f"{len(semantic_structure.events)} events, "
+                    f"{len(semantic_structure.changes)} changes"
+                )
+            
+            # Embed all semantic units
+            if all_semantic_units:
+                unit_texts = [unit_text for _, _, unit_text in all_semantic_units]
+                logger.info(f"Embedding {len(unit_texts)} semantic units for {len(items_needing_embeddings)} items")
+                unit_embeddings = self.embedding_provider.embed_batch(unit_texts)
+                
+                # Average unit embeddings for each parent item
+                unit_embeddings_by_parent = {}
+                for unit_idx, unit_embedding in enumerate(unit_embeddings):
+                    parent_idx = unit_to_item_map[unit_idx]
+                    if parent_idx not in unit_embeddings_by_parent:
+                        unit_embeddings_by_parent[parent_idx] = []
+                    unit_embeddings_by_parent[parent_idx].append(unit_embedding.vector)
+                
+                # Assign averaged embeddings to parent items
+                for parent_idx, unit_vectors in unit_embeddings_by_parent.items():
+                    import numpy as np
+                    avg_vector = np.mean(unit_vectors, axis=0)
+                    items_needing_embeddings[parent_idx].embedding = type(unit_embeddings[0])(
+                        vector=avg_vector,
+                        model=unit_embeddings[0].model
+                    )
+                    logger.info(
+                        f"Averaged {len(unit_vectors)} semantic unit embeddings for "
+                        f"{items_needing_embeddings[parent_idx].id}"
+                    )
         
         # Fit topic model if using LDA (needs corpus)
         from idearank.providers.topics import LDATopicModelProvider
@@ -92,6 +194,39 @@ class IdeaRankPipeline:
                 item.topic_mixture = topic
         
         return content_items
+    
+    def _extract_semantic_structure(self, content_item: ContentItem):
+        """Extract semantic structure from a content item using semantic extractor.
+        
+        Args:
+            content_item: Content item to analyze
+            
+        Returns:
+            SemanticStructure with actors, events, and changes
+        """
+        from idearank.semantic_extractor import SemanticStructure, FallbackSemanticExtractor
+        
+        # Use configured semantic extractor if available, otherwise fallback
+        if self.semantic_extractor:
+            try:
+                return self.semantic_extractor.extract(
+                    content_id=content_item.id,
+                    text=content_item.full_text,
+                    title=content_item.title if hasattr(content_item, 'title') else ""
+                )
+            except Exception as e:
+                logger.warning(f"Semantic extraction failed for {content_item.id}: {e}. Using fallback.")
+                fallback = FallbackSemanticExtractor()
+                return fallback.extract(content_item.id, content_item.full_text, "")
+        else:
+            # No semantic extractor configured, use simple fallback
+            logger.info(f"No semantic extractor configured, using fallback for {content_item.id}")
+            fallback = FallbackSemanticExtractor()
+            return fallback.extract(
+                content_id=content_item.id,
+                text=content_item.full_text,
+                title=content_item.title if hasattr(content_item, 'title') else ""
+            )
     
     def index_content(self, content_items: List[ContentItem]) -> None:
         """Add content items to the neighborhood index."""

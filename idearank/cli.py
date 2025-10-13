@@ -235,8 +235,8 @@ def list_sources(enabled_only: bool):
         return
     
     table = Table(title="Content Sources")
-    table.add_column("ID", style="cyan", width=20)
-    table.add_column("Name", style="white", width=25)
+    table.add_column("ID", style="cyan", width=35)  # Increased width for full IDs
+    table.add_column("Name", style="white", width=30)
     table.add_column("Type", style="green", width=12)
     table.add_column("Items", justify="right", width=6)
     table.add_column("Status", justify="center", width=8)
@@ -260,6 +260,16 @@ def list_sources(enabled_only: bool):
     rprint(f"\nTotal sources: {len(sources)}")
     if enabled_only:
         rprint(f"(Showing enabled only. Use without --enabled-only to see all)")
+    
+    # Show incomplete sources
+    incomplete_sources = [s for s in sources if s.max_items != -1 and s.max_items < 1000]
+    if incomplete_sources:
+        rprint(f"\n[yellow]Incomplete sources (not all items processed):[/yellow]")
+        for source in incomplete_sources:
+            rprint(f"  [cyan]{source.id}[/cyan] - {source.name} ({source.max_items} items)")
+        rprint(f"\nTo remove incomplete sources:")
+        for source in incomplete_sources:
+            rprint(f"  [dim]idearank source remove {source.id}[/dim]")
 
 
 @source.command("remove")
@@ -305,6 +315,69 @@ def clear_sources():
     sources_config = SourcesConfig()
     count = sources_config.clear_all()
     rprint(f"[green]✓[/green] Removed {count} sources")
+
+
+@source.command("status")
+@click.option("--database", default="idearank_all_content.db", help="Database to check status against")
+def source_status(database: str):
+    """Show processing status of all sources."""
+    from idearank.integrations.storage import SQLiteStorage
+    
+    sources_config = SourcesConfig()
+    sources = sources_config.list_sources()
+    
+    if not sources:
+        rprint("[yellow]No content sources configured.[/yellow]")
+        return
+    
+    # Initialize storage to check content counts
+    try:
+        storage = SQLiteStorage(database)
+    except Exception as e:
+        rprint(f"[red]Database not found: {database}[/red]")
+        rprint("Run [cyan]idearank process-all[/cyan] first to create the database.")
+        return
+    
+    table = Table(title="Source Processing Status")
+    table.add_column("Source", style="white", width=30)
+    table.add_column("Type", style="green", width=12)
+    table.add_column("Items", justify="right", width=6)
+    table.add_column("In DB", justify="right", width=6)
+    table.add_column("Status", justify="center", width=8)
+    table.add_column("Last Processed", style="dim", width=20)
+    
+    for source in sources:
+        # Count items in database
+        db_count = _find_existing_content_count(storage, source)
+        
+        # Determine status
+        if not source.enabled:
+            status = "[dim]disabled[/dim]"
+        elif db_count == 0:
+            status = "[yellow]pending[/yellow]"
+        elif source.max_items != -1 and db_count >= source.max_items:
+            status = "[green]complete[/green]"
+        elif source.max_items == -1 and source.last_processed:
+            status = "[green]complete[/green]"
+        else:
+            status = "[blue]partial[/blue]"
+        
+        max_items_display = "ALL" if source.max_items == -1 else str(source.max_items)
+        last_proc = source.last_processed[:19] if source.last_processed else "Never"
+        
+        table.add_row(
+            source.name or source.url_or_path[:25],
+            source.type,
+            max_items_display,
+            str(db_count),
+            status,
+            last_proc,
+        )
+    
+    storage.close()
+    console.print(table)
+    rprint(f"\nTotal sources: {len(sources)}")
+    rprint(f"Database: {database}")
 
 
 @viz.command("dashboard")
@@ -543,16 +616,22 @@ def diagnose(database: str):
 @click.option("--output", default="idearank_all_content.db", help="SQLite database output path")
 @click.option("--collection", default="idearank_all_content", help="Chroma collection name")
 @click.option("--openai-key", envvar="OPENAI_API_KEY", help="OpenAI API key for embeddings")
-def process_all(output: str, collection: str, openai_key: Optional[str]):
+@click.option("--force", is_flag=True, help="Force reprocessing of all sources (ignore cache)")
+@click.option("--skip-processed", is_flag=True, default=True, help="Skip sources that have already been processed")
+def process_all(output: str, collection: str, openai_key: Optional[str], force: bool, skip_processed: bool):
     """Process all enabled content sources.
     
     This command processes all sources you've added with 'idearank source add'
     and stores them in a unified database for cross-platform analysis.
     
+    By default, sources that have already been processed are skipped for efficiency.
+    Use --force to reprocess all sources.
+    
     Example:
         idearank source add https://youtube.com/@channel1
         idearank source add my-blog.ghost.json
-        idearank process-all
+        idearank process-all                    # Skip already processed sources
+        idearank process-all --force            # Reprocess everything
     """
     sources_config = SourcesConfig()
     cfg = CLIConfig()
@@ -565,23 +644,56 @@ def process_all(output: str, collection: str, openai_key: Optional[str]):
         rprint("View sources with: [cyan]idearank source list[/cyan]")
         return
     
+    # Check what needs processing
+    sources_to_process = []
+    sources_skipped = []
+    
+    # Initialize storage to check what's already processed
+    from idearank.integrations.storage import SQLiteStorage
+    storage = SQLiteStorage(output)
+    
+    for source in sources:
+        if force:
+            sources_to_process.append(source)
+        elif skip_processed and source.last_processed:
+            # Check if source was processed recently and has content in database
+            existing_count = _find_existing_content_count(storage, source)
+            if existing_count > 0:
+                sources_skipped.append((source, existing_count))
+                continue
+        
+        sources_to_process.append(source)
+    
     # Show summary
     console.print(Panel.fit(
         f"[bold]Processing All Content Sources[/bold]\n\n"
-        f"Sources: {len(sources)}\n"
+        f"Total sources: {len(sources)}\n"
+        f"To process: {len(sources_to_process)}\n"
+        f"Skipped (cached): {len(sources_skipped)}\n"
         f"Output: {output}\n"
         f"Collection: {collection}",
         border_style="blue"
     ))
     
-    rprint("\nSources to process:")
-    for i, source in enumerate(sources, 1):
-        rprint(f"  {i}. [{source.type}] {source.name} ({source.max_items} items)")
+    if sources_skipped:
+        rprint(f"\n[yellow]Skipping {len(sources_skipped)} already processed sources:[/yellow]")
+        for source, count in sources_skipped:
+            rprint(f"  [dim]✓[/dim] [{source.type}] {source.name} ({count} items)")
     
-    # Process each source
-    for i, source in enumerate(sources, 1):
+    if sources_to_process:
+        rprint(f"\nSources to process:")
+        for i, source in enumerate(sources_to_process, 1):
+            max_items_display = "ALL" if source.max_items == -1 else str(source.max_items)
+            rprint(f"  {i}. [{source.type}] {source.name} ({max_items_display} items)")
+    else:
+        rprint(f"\n[green]✓ All sources already processed![/green]")
+        rprint(f"Use [cyan]--force[/cyan] to reprocess all sources")
+        return
+    
+    # Process each source that needs processing
+    for i, source in enumerate(sources_to_process, 1):
         rprint(f"\n{'='*70}")
-        rprint(f"[bold]Processing {i}/{len(sources)}: {source.name}[/bold]")
+        rprint(f"[bold]Processing {i}/{len(sources_to_process)}: {source.name}[/bold]")
         rprint(f"{'='*70}")
         
         try:
@@ -608,11 +720,77 @@ def process_all(output: str, collection: str, openai_key: Optional[str]):
             logger.error(f"Error processing {source.id}: {e}", exc_info=True)
             continue
     
+    storage.close()
+    
     rprint(f"\n{'='*70}")
-    rprint(f"[bold green]✓ All sources processed![/bold green]")
+    if sources_skipped:
+        rprint(f"[bold green]✓ Processing complete![/bold green]")
+        rprint(f"Processed: {len(sources_to_process)} sources")
+        rprint(f"Skipped (cached): {len(sources_skipped)} sources")
+    else:
+        rprint(f"[bold green]✓ All sources processed![/bold green]")
     rprint(f"{'='*70}")
     rprint(f"\nResults saved to: {output}")
     rprint(f"Chroma collection: {collection}")
+
+
+def _count_source_content(storage, source_id: str) -> int:
+    """Count how many content items exist for a source."""
+    try:
+        from idearank.integrations.storage import ContentItemRecord
+        count = storage.session.query(ContentItemRecord).filter_by(content_source_id=source_id).count()
+        return count
+    except Exception:
+        return 0
+
+
+def _find_existing_content_count(storage, source) -> int:
+    """Find existing content count for a source by matching name or URL patterns."""
+    try:
+        from idearank.integrations.storage import ContentItemRecord, ContentSourceRecord
+        
+        # First try exact source ID match
+        count = storage.session.query(ContentItemRecord).filter_by(content_source_id=source.id).count()
+        if count > 0:
+            return count
+        
+        # Try to find by source name patterns
+        if source.type == "medium":
+            # Look for medium_* patterns or "Medium User" name
+            medium_count = storage.session.query(ContentItemRecord).join(
+                ContentSourceRecord, 
+                ContentItemRecord.content_source_id == ContentSourceRecord.id
+            ).filter(
+                ContentSourceRecord.name.like('medium_%') | 
+                ContentSourceRecord.name.like('%Medium%')
+            ).count()
+            if medium_count > 0:
+                return medium_count
+        
+        elif source.type == "youtube":
+            # Look for YouTube channel IDs (UC_*)
+            youtube_count = storage.session.query(ContentItemRecord).filter(
+                ContentItemRecord.content_source_id.like('UC_%')
+            ).count()
+            if youtube_count > 0:
+                return youtube_count
+        
+        elif source.type == "ghost_export":
+            # Look for ghost patterns or "Idea Nexus Ventures" name
+            ghost_count = storage.session.query(ContentItemRecord).join(
+                ContentSourceRecord,
+                ContentItemRecord.content_source_id == ContentSourceRecord.id
+            ).filter(
+                ContentSourceRecord.name.like('%ghost%') |
+                ContentSourceRecord.name.like('%Idea Nexus%') |
+                ContentSourceRecord.name.like('%Ventures%')
+            ).count()
+            if ghost_count > 0:
+                return ghost_count
+        
+        return 0
+    except Exception:
+        return 0
 
 
 def _process_youtube_source(source: ContentSource, cfg: CLIConfig, output: str, collection: str, openai_key: Optional[str]):
@@ -650,6 +828,12 @@ def _process_youtube_source(source: ContentSource, cfg: CLIConfig, output: str, 
         except ImportError:
             embedding_provider = DummyEmbeddingProvider(dimension=384)
     
+    # Semantic extractor (for decomposing long content)
+    semantic_extractor = None
+    if openai_key:
+        from idearank.semantic_extractor import SemanticExtractor
+        semantic_extractor = SemanticExtractor(api_key=openai_key, model="gpt-5-nano")
+    
     # Pipeline
     idearank_config = IdeaRankConfig.default()
     idearank_pipeline = IdeaRankPipeline(
@@ -657,6 +841,8 @@ def _process_youtube_source(source: ContentSource, cfg: CLIConfig, output: str, 
         embedding_provider=embedding_provider,
         topic_provider=DummyTopicModelProvider(),
         neighborhood_provider=chroma_provider,
+        storage=storage,  # Pass storage for chunk/semantic persistence
+        semantic_extractor=semantic_extractor,  # For decomposing long content
     )
     
     youtube_pipeline = YouTubePipeline(
@@ -709,6 +895,12 @@ def _process_ghost_export_source(source: ContentSource, output: str, collection:
         except ImportError:
             embedding_provider = DummyEmbeddingProvider(dimension=384)
     
+    # Semantic extractor (for decomposing long content)
+    semantic_extractor = None
+    if openai_key:
+        from idearank.semantic_extractor import SemanticExtractor
+        semantic_extractor = SemanticExtractor(api_key=openai_key, model="gpt-5-nano")
+    
     # Pipeline
     idearank_config = IdeaRankConfig.default()
     idearank_pipeline = IdeaRankPipeline(
@@ -716,6 +908,8 @@ def _process_ghost_export_source(source: ContentSource, output: str, collection:
         embedding_provider=embedding_provider,
         topic_provider=DummyTopicModelProvider(),
         neighborhood_provider=chroma_provider,
+        storage=storage,  # Pass storage for chunk/semantic persistence
+        semantic_extractor=semantic_extractor,  # For decomposing long content
     )
     
     ghost_pipeline = GhostPipeline(
@@ -771,6 +965,12 @@ def _process_twitter_source(source: ContentSource, output: str, collection: str,
     except ImportError:
         topic_provider = DummyTopicModelProvider()
     
+    # Semantic extractor (for decomposing content)
+    semantic_extractor = None
+    if openai_key:
+        from idearank.semantic_extractor import SemanticExtractor
+        semantic_extractor = SemanticExtractor(api_key=openai_key, model="gpt-5-nano")
+    
     # Load the Twitter archive from JSON file
     file_path = source.url_or_path
     rprint(f"[blue]Loading Twitter archive from: {file_path}...[/blue]")
@@ -799,6 +999,7 @@ def _process_twitter_source(source: ContentSource, output: str, collection: str,
         topic_provider=topic_provider,
         chroma_provider=chroma_provider,
         limit=limit,
+        semantic_extractor=semantic_extractor,
     )
     
     if results['success']:
@@ -850,6 +1051,12 @@ def _process_medium_source(source: ContentSource, output: str, collection: str, 
     except ImportError:
         topic_provider = DummyTopicModelProvider()
     
+    # Semantic extractor (for decomposing content)
+    semantic_extractor = None
+    if openai_key:
+        from idearank.semantic_extractor import SemanticExtractor
+        semantic_extractor = SemanticExtractor(api_key=openai_key, model="gpt-5-nano")
+    
     # Process archive
     content_source, stats = process_medium_archive(
         archive_path=source.url_or_path,
@@ -859,6 +1066,7 @@ def _process_medium_source(source: ContentSource, output: str, collection: str, 
         neighborhood_provider=chroma_provider,
         limit=limit,
         skip_drafts=True,
+        semantic_extractor=semantic_extractor,
     )
     
     rprint(f"[green]✓[/green] Processed {stats['total_posts']} posts")
@@ -903,6 +1111,12 @@ def _process_ghost_api_source(source: ContentSource, cfg: CLIConfig, output: str
         except ImportError:
             embedding_provider = DummyEmbeddingProvider(dimension=384)
     
+    # Semantic extractor (for decomposing long content)
+    semantic_extractor = None
+    if openai_key:
+        from idearank.semantic_extractor import SemanticExtractor
+        semantic_extractor = SemanticExtractor(api_key=openai_key, model="gpt-5-nano")
+    
     # Pipeline
     idearank_config = IdeaRankConfig.default()
     idearank_pipeline = IdeaRankPipeline(
@@ -910,6 +1124,8 @@ def _process_ghost_api_source(source: ContentSource, cfg: CLIConfig, output: str
         embedding_provider=embedding_provider,
         topic_provider=DummyTopicModelProvider(),
         neighborhood_provider=chroma_provider,
+        storage=storage,  # Pass storage for chunk/semantic persistence
+        semantic_extractor=semantic_extractor,  # For decomposing long content
     )
     
     ghost_pipeline = GhostPipeline(

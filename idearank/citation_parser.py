@@ -256,12 +256,12 @@ class CitationValidator:
     Uses LLM to verify that attributions are accurate.
     """
     
-    def __init__(self, openai_api_key: str, model: str = "gpt-4o-mini"):
+    def __init__(self, openai_api_key: str, model: str = "gpt-5-nano"):
         """Initialize validator with OpenAI.
         
         Args:
             openai_api_key: OpenAI API key
-            model: Model to use (gpt-4o-mini is cheap and good enough)
+            model: Model to use (gpt-5-nano is cheap and good enough)
         """
         if not OPENAI_AVAILABLE:
             raise ImportError("openai required for validation. Install with: pip install openai")
@@ -297,7 +297,6 @@ EXPLANATION: [Brief explanation]"""
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,  # Low temperature for consistent fact-checking
                 max_tokens=150,
             )
             

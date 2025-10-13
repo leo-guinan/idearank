@@ -73,7 +73,7 @@ def load_data(db_path: str):
             c.published_at,
             c.view_count,
             c.impression_count,
-            c.content_duration,
+            c.duration_seconds,
             s.score,
             s.uniqueness_score,
             s.cohesion_score,
@@ -147,6 +147,11 @@ def main():
     all_sources = ["All Sources"] + sources_df['name'].tolist()
     selected_source = st.sidebar.selectbox("Content Source:", all_sources)
     
+    # Deduplication option
+    st.sidebar.header("🧹 Data Quality")
+    remove_duplicates = st.sidebar.checkbox("Remove Duplicates", value=True, 
+                                          help="Remove duplicate content items based on title and source")
+    
     # Filter data
     if selected_source != "All Sources":
         source_id = sources_df[sources_df['name'] == selected_source]['id'].iloc[0]
@@ -154,6 +159,22 @@ def main():
     else:
         filtered_items = items_df
         source_id = None
+    
+    # Apply deduplication if requested
+    if remove_duplicates:
+        # Count duplicates before removal
+        initial_count = len(filtered_items)
+        
+        # Remove duplicates based on title and content_source_id
+        filtered_items = filtered_items.drop_duplicates(
+            subset=['title', 'content_source_id'], 
+            keep='first'
+        )
+        
+        # Show deduplication stats
+        removed_count = initial_count - len(filtered_items)
+        if removed_count > 0:
+            st.sidebar.info(f"Removed {removed_count} duplicates")
     
     # Date range filter
     min_date = filtered_items['published_at'].min()
@@ -204,7 +225,7 @@ def main():
     
     # TAB 6: Trends
     with tabs[5]:
-        show_trends(filtered_items, selected_source)
+        show_trends(filtered_items, selected_source, sources_df)
 
 
 def show_overview(sources_df, items_df, selected_source):
@@ -466,7 +487,8 @@ def show_content_explorer(items_df):
             with col2:
                 st.metric("Views", f"{row['view_count']:,}")
                 st.metric("Impressions", f"{row['impression_count']:,}")
-                st.metric("Duration", f"{row['content_duration']/60:.1f} min")
+                duration_min = row['duration_seconds']/60 if row['duration_seconds'] else 0
+                st.metric("Duration", f"{duration_min:.1f} min")
                 st.metric("Gates Passed", "✅" if row['passes_gates'] else "❌")
 
 
@@ -540,7 +562,7 @@ def show_source_comparison(sources_df, items_df):
         )
 
 
-def show_trends(items_df, selected_source):
+def show_trends(items_df, selected_source, sources_df):
     """Show trends over time."""
     st.header("📉 Trends Over Time")
     
@@ -551,14 +573,40 @@ def show_trends(items_df, selected_source):
     # Scores over time
     st.subheader("IdeaRank Score Timeline")
     
-    fig = px.scatter(
-        items_df.sort_values('published_at'),
-        x='published_at',
-        y='score',
-        hover_data=['title', 'view_count'],
-        title=f"IdeaRank Scores Over Time - {selected_source}",
-        trendline="lowess"
-    )
+    # Get source names for coloring
+    plot_data = items_df.sort_values('published_at').copy()
+    if 'content_source_id' in plot_data.columns:
+        # Merge with source names for coloring
+        sources_lookup = {row['id']: row['name'] for _, row in sources_df.iterrows()}
+        plot_data['source_name'] = plot_data['content_source_id'].map(sources_lookup).fillna('Unknown')
+        color_col = 'source_name'
+        hover_data = ['title', 'view_count', 'source_name']
+    else:
+        color_col = None
+        hover_data = ['title', 'view_count']
+    
+    # Try to use trendline if statsmodels is available
+    try:
+        fig = px.scatter(
+            plot_data,
+            x='published_at',
+            y='score',
+            color=color_col,
+            hover_data=hover_data,
+            title=f"IdeaRank Scores Over Time - {selected_source}",
+            trendline="lowess"
+        )
+    except (ImportError, ModuleNotFoundError):
+        # Fall back to scatter without trendline if statsmodels not available
+        fig = px.scatter(
+            plot_data,
+            x='published_at',
+            y='score',
+            color=color_col,
+            hover_data=hover_data,
+            title=f"IdeaRank Scores Over Time - {selected_source}"
+        )
+    
     fig.update_traces(marker=dict(size=8, opacity=0.6))
     st.plotly_chart(fig, use_container_width=True)
     
@@ -624,10 +672,26 @@ def show_trends(items_df, selected_source):
         y='Avg Score',
         markers=True,
         title="Average IdeaRank Score by Month",
-        text='Count'
+        hover_data=['Count']
     )
-    fig.update_traces(textposition='top center')
+    fig.update_layout(
+        yaxis_title="Average IdeaRank Score",
+        yaxis_range=[0, 1]
+    )
     st.plotly_chart(fig, use_container_width=True)
+    
+    # Show count information separately
+    st.subheader("Content Volume by Month")
+    fig_count = px.bar(
+        monthly_agg,
+        x='Month',
+        y='Count',
+        title="Number of Content Items by Month",
+        color='Count',
+        color_continuous_scale='Blues'
+    )
+    fig_count.update_layout(yaxis_title="Number of Items")
+    st.plotly_chart(fig_count, use_container_width=True)
 
 
 if __name__ == "__main__":

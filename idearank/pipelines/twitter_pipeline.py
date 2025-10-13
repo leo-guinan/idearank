@@ -27,6 +27,7 @@ class TwitterPipeline:
         embedding_provider: EmbeddingProvider,
         topic_provider: TopicModelProvider,
         chroma_provider: ChromaProvider,
+        semantic_extractor = None,
     ):
         """Initialize Twitter pipeline.
         
@@ -35,6 +36,7 @@ class TwitterPipeline:
             embedding_provider: For generating embeddings
             topic_provider: For topic modeling
             chroma_provider: For vector search
+            semantic_extractor: Optional semantic extractor for content decomposition
         """
         self.storage = storage
         self.embedding_provider = embedding_provider
@@ -51,6 +53,8 @@ class TwitterPipeline:
             embedding_provider=embedding_provider,
             topic_provider=topic_provider,
             neighborhood_provider=chroma_provider,
+            storage=storage,  # Pass storage for chunk/semantic persistence
+            semantic_extractor=semantic_extractor,  # For semantic decomposition
         )
     
     def process_archive(
@@ -256,6 +260,7 @@ def process_twitter_archive(
     topic_provider: TopicModelProvider,
     chroma_provider: ChromaProvider,
     limit: Optional[int] = None,
+    semantic_extractor = None,
 ) -> Dict[str, Any]:
     """Convenience function to process a Twitter archive.
     
@@ -266,6 +271,7 @@ def process_twitter_archive(
         topic_provider: Topic provider
         chroma_provider: Chroma provider
         limit: Maximum posts to process
+        semantic_extractor: Optional semantic extractor for content decomposition
         
     Returns:
         Processing results
@@ -276,6 +282,7 @@ def process_twitter_archive(
         embedding_provider=embedding_provider,
         topic_provider=topic_provider,
         chroma_provider=chroma_provider,
+        semantic_extractor=semantic_extractor,
     )
     
     results = pipeline.process_archive(archive, limit)
