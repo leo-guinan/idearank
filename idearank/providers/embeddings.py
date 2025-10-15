@@ -230,9 +230,19 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     
     def _embed_batch_internal(self, texts: List[str]) -> List[Embedding]:
         """Internal method to call OpenAI API for a batch that fits within limits."""
+        # Filter out empty/invalid texts and ensure all are strings
+        valid_texts = []
+        for text in texts:
+            if text and isinstance(text, str) and text.strip():
+                valid_texts.append(text.strip())
+        
+        if not valid_texts:
+            # Return empty embeddings if no valid texts
+            return [Embedding(vector=np.zeros(self.dimension, dtype=np.float32), model=self.model_name) for _ in texts]
+        
         response = self.client.embeddings.create(
             model=self._model,
-            input=texts,
+            input=valid_texts,
         )
         
         return [

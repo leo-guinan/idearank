@@ -17,12 +17,14 @@ try:
         ChromaNeighborhoodProvider,
         ChromaProvider,
     )
+    from idearank.providers.dual_chroma import DualChromaProvider
     CHROMA_AVAILABLE = True
 except ImportError:
     CHROMA_AVAILABLE = False
     ChromaEmbeddingProvider = None
     ChromaNeighborhoodProvider = None
     ChromaProvider = None
+    DualChromaProvider = None
 
 __all__ = [
     "EmbeddingProvider",
@@ -34,6 +36,7 @@ __all__ = [
     "ChromaEmbeddingProvider",
     "ChromaNeighborhoodProvider",
     "ChromaProvider",
+    "DualChromaProvider",
     "CHROMA_AVAILABLE",
 ]
 

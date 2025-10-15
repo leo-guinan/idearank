@@ -59,4 +59,15 @@ models/
 # OS
 .DS_Store
 Thumbs.db
+*.db
+twitter*.zip
 
+# Interactive game files
+interactive_game*.html
+chroma_interactive_game/
+
+# Competition demo files
+reason_map*.html
+coaching_impact*.html
+viz_data*.json
+chroma_competition/

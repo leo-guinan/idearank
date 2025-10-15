@@ -91,6 +91,14 @@ class TwitterPipeline:
         
         logger.info(f"Converted {len(content_items)} posts to content items")
         
+        # Save content items to database first
+        logger.info(f"\n[3/6] Saving to SQLite database...")
+        for i, item in enumerate(content_items, 1):
+            self.storage.save_content_item(item)
+            if i % 10 == 0:
+                logger.info(f"  Saved {i}/{len(content_items)} posts...")
+        logger.info(f"✓ Saved {len(content_items)} posts to database")
+        
         # Process in batches
         processed_items = []
         for i in range(0, len(content_items), batch_size):

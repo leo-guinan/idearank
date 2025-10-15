@@ -4,6 +4,40 @@ A multi-factor ranking system for content that measures **uniqueness**, **cohesi
 
 **Think PageRank, but for ideas.**
 
+## 🎮 Play IdeaRank-Thought Interactively!
+
+Test your reasoning skills or coaching abilities in an interactive CLI game:
+
+```bash
+idearank play-game
+```
+
+**Player Mode**: Solve reasoning challenges with AI coaching support  
+**Coach Mode**: Provide interventions to help an AI player improve
+
+Commands: `help`, `submit`, `quit` (player) | `strategy`, `tactical`, `timeout` (coach)
+
+## 🏆 NEW: IdeaRank-Thought Competition System
+
+IdeaRank now includes a complete competition framework for real-time reasoning evaluation! 
+
+- **Live matches** between players solving complex challenges
+- **Coaching interventions** with timeout management and impact analysis
+- **Comprehensive scoring** using the IdeaRank-Thought algorithm from the technical appendix
+- **Interactive visualizations** with Reason Map Overlays
+- **Integrity protocols** with cryptographic verification
+
+```python
+from idearank import CompetitionPipeline, Player, Coach, Challenge
+
+# Create and run a competition match
+pipeline = CompetitionPipeline(embedding_provider, chroma_provider)
+match = pipeline.create_match(challenge_id, player1_id, player2_id)
+results = pipeline.complete_match(match.id)
+```
+
+See [COMPETITION_README.md](COMPETITION_README.md) for the complete competition system documentation.
+
 ## Quick Start
 
 ### Installation
@@ -227,6 +261,47 @@ pipeline = IdeaRankPipeline(
     neighborhood_provider=chroma.get_neighborhood_provider(),
 )
 ```
+
+### Dual Chroma Storage: Semantic Units vs Chunks
+
+IdeaRank supports parallel storage in **two separate Chroma collections** for A/B testing different embedding strategies:
+
+1. **Semantic Units**: Extracted actors, events, and changes (structured knowledge)
+2. **Document Chunks**: Traditional text chunks (contextual retrieval)
+
+```python
+from idearank.providers.dual_chroma import DualChromaProvider
+
+# Initialize dual provider
+dual_provider = DualChromaProvider(
+    persist_directory="./chroma_data",  # or None for cloud
+    embedding_function="sentence-transformers",
+    model_name="all-MiniLM-L6-v2",
+)
+
+# Process content into BOTH collections
+stats = dual_provider.process_and_index_content(content_item, mode="both")
+print(f"Semantic units: {stats['semantic_units_count']}")
+print(f"Chunks: {stats['chunks_count']}")
+
+# Compare both approaches
+comparison = dual_provider.compare_queries(
+    "What is machine learning?",
+    k=5
+)
+print(f"Overlap: {comparison['overlap_percentage']:.1f}%")
+```
+
+**Run the examples:**
+```bash
+# Simple comparison
+python examples/dual_chroma_comparison.py
+
+# Batch processing
+python examples/dual_chroma_batch_processing.py
+```
+
+See [DUAL_CHROMA_GUIDE.md](DUAL_CHROMA_GUIDE.md) for detailed documentation.
 
 ## CLI Reference
 

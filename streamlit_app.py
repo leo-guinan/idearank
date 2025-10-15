@@ -154,7 +154,11 @@ def main():
     
     # Filter data
     if selected_source != "All Sources":
-        source_id = sources_df[sources_df['name'] == selected_source]['id'].iloc[0]
+        source_matches = sources_df[sources_df['name'] == selected_source]
+        if len(source_matches) == 0:
+            st.error(f"Source '{selected_source}' not found.")
+            return
+        source_id = source_matches['id'].iloc[0]
         filtered_items = items_df[items_df['content_source_id'] == source_id]
     else:
         filtered_items = items_df
@@ -177,21 +181,42 @@ def main():
             st.sidebar.info(f"Removed {removed_count} duplicates")
     
     # Date range filter
-    min_date = filtered_items['published_at'].min()
-    max_date = filtered_items['published_at'].max()
+    # Handle NaT values in published_at column
+    valid_dates = filtered_items['published_at'].dropna()
     
-    date_range = st.sidebar.date_input(
-        "Date Range:",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date
-    )
+    if len(valid_dates) > 0:
+        min_date = valid_dates.min().date()
+        max_date = valid_dates.max().date()
+        
+        date_range = st.sidebar.date_input(
+            "Date Range:",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date
+        )
+    else:
+        # No valid dates found, use default range
+        from datetime import datetime, timedelta
+        today = datetime.now().date()
+        min_date = today - timedelta(days=30)
+        max_date = today
+        
+        st.sidebar.warning("No valid dates found in data. Using default 30-day range.")
+        date_range = st.sidebar.date_input(
+            "Date Range:",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date
+        )
     
     if len(date_range) == 2:
-        filtered_items = filtered_items[
+        # Only filter items with valid dates
+        valid_date_mask = filtered_items['published_at'].notna()
+        date_filter_mask = (
             (filtered_items['published_at'] >= pd.Timestamp(date_range[0])) &
             (filtered_items['published_at'] <= pd.Timestamp(date_range[1]))
-        ]
+        )
+        filtered_items = filtered_items[valid_date_mask & date_filter_mask]
     
     # Main content area
     tabs = st.tabs([
@@ -239,18 +264,30 @@ def show_overview(sources_df, items_df, selected_source):
         st.metric("Total Content", len(items_df))
     
     with col2:
-        st.metric("Avg IdeaRank", f"{items_df['score'].mean():.3f}")
+        if len(items_df) > 0:
+            st.metric("Avg IdeaRank", f"{items_df['score'].mean():.3f}")
+        else:
+            st.metric("Avg IdeaRank", "N/A")
     
     with col3:
-        st.metric("Top Score", f"{items_df['score'].max():.3f}")
+        if len(items_df) > 0:
+            st.metric("Top Score", f"{items_df['score'].max():.3f}")
+        else:
+            st.metric("Top Score", "N/A")
     
     with col4:
-        high_quality = len(items_df[items_df['score'] > 0.7])
-        st.metric("High Quality (>0.7)", high_quality)
+        if len(items_df) > 0:
+            high_quality = len(items_df[items_df['score'] > 0.7])
+            st.metric("High Quality (>0.7)", high_quality)
+        else:
+            st.metric("High Quality (>0.7)", 0)
     
     with col5:
-        passed_gates = len(items_df[items_df['passes_gates'] == 1])
-        st.metric("Passed Gates", passed_gates)
+        if len(items_df) > 0:
+            passed_gates = len(items_df[items_df['passes_gates'] == 1])
+            st.metric("Passed Gates", passed_gates)
+        else:
+            st.metric("Passed Gates", 0)
     
     st.markdown("---")
     
@@ -267,18 +304,28 @@ def show_overview(sources_df, items_df, selected_source):
             labels={'score': 'IdeaRank Score', 'count': 'Number of Items'}
         )
         fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     
     with col2:
         st.subheader("Factor Averages")
-        factor_avgs = {
-            'Uniqueness': items_df['uniqueness_score'].mean(),
-            'Cohesion': items_df['cohesion_score'].mean(),
-            'Learning': items_df['learning_score'].mean(),
-            'Quality': items_df['quality_score'].mean(),
-            'Trust': items_df['trust_score'].mean(),
-            'Density': items_df['density_score'].mean(),
-        }
+        if len(items_df) > 0:
+            factor_avgs = {
+                'Uniqueness': items_df['uniqueness_score'].mean(),
+                'Cohesion': items_df['cohesion_score'].mean(),
+                'Learning': items_df['learning_score'].mean(),
+                'Quality': items_df['quality_score'].mean(),
+                'Trust': items_df['trust_score'].mean(),
+                'Density': items_df['density_score'].mean(),
+            }
+        else:
+            factor_avgs = {
+                'Uniqueness': 0.0,
+                'Cohesion': 0.0,
+                'Learning': 0.0,
+                'Quality': 0.0,
+                'Trust': 0.0,
+                'Density': 0.0,
+            }
         
         fig = go.Figure(data=[
             go.Bar(
@@ -293,7 +340,7 @@ def show_overview(sources_df, items_df, selected_source):
             xaxis_title="Factor",
             yaxis_range=[0, 1]
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
 
 def show_top_content(items_df):
@@ -302,6 +349,10 @@ def show_top_content(items_df):
     
     # Top by overall score
     st.subheader("Top 20 by IdeaRank Score")
+    
+    if len(items_df) == 0:
+        st.warning("No content items available.")
+        return
     
     top_items = items_df.nlargest(20, 'score')[
         ['title', 'score', 'uniqueness_score', 'cohesion_score', 
@@ -315,7 +366,7 @@ def show_top_content(items_df):
     
     st.dataframe(
         top_items,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config={
             'title': st.column_config.TextColumn('Title', width='large'),
@@ -344,13 +395,20 @@ def show_top_content(items_df):
         'Density': 'density_score',
     }
     
+    if len(items_df) == 0:
+        st.warning("No content items available for factor analysis.")
+        return
+    
     cols = st.columns(3)
     for idx, (factor_name, col_name) in enumerate(factors.items()):
         with cols[idx % 3]:
             st.write(f"**{factor_name}**")
             top_5 = items_df.nlargest(5, col_name)[['title', col_name]]
-            for _, row in top_5.iterrows():
-                st.write(f"• {row['title'][:40]}... ({row[col_name]:.2f})")
+            if len(top_5) == 0:
+                st.write("No data available")
+            else:
+                for _, row in top_5.iterrows():
+                    st.write(f"• {row['title'][:40]}... ({row[col_name]:.2f})")
 
 
 def show_factor_analysis(items_df):
@@ -360,32 +418,53 @@ def show_factor_analysis(items_df):
     # Factor correlation heatmap
     st.subheader("Factor Correlations")
     
-    factor_cols = ['uniqueness_score', 'cohesion_score', 'learning_score', 
-                   'quality_score', 'trust_score', 'density_score']
-    corr_matrix = items_df[factor_cols].corr()
-    
-    fig = px.imshow(
-        corr_matrix,
-        labels=dict(x="Factor", y="Factor", color="Correlation"),
-        x=['U', 'C', 'L', 'Q', 'T', 'D'],
-        y=['U', 'C', 'L', 'Q', 'T', 'D'],
-        color_continuous_scale='RdBu',
-        zmin=-1, zmax=1,
-        title="Factor Correlation Matrix"
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    if len(items_df) > 1:  # Need at least 2 items for correlation
+        factor_cols = ['uniqueness_score', 'cohesion_score', 'learning_score', 
+                       'quality_score', 'trust_score', 'density_score']
+        corr_matrix = items_df[factor_cols].corr()
+        
+        fig = px.imshow(
+            corr_matrix,
+            labels=dict(x="Factor", y="Factor", color="Correlation"),
+            x=['U', 'C', 'L', 'Q', 'T', 'D'],
+            y=['U', 'C', 'L', 'Q', 'T', 'D'],
+            color_continuous_scale='RdBu',
+            zmin=-1, zmax=1,
+            title="Factor Correlation Matrix"
+        )
+    else:
+        st.warning("Need at least 2 content items to calculate correlations.")
+        return
+    st.plotly_chart(fig, width='stretch')
     
     # Factor component details
     st.markdown("---")
     st.subheader("Component Breakdown")
     
     # Select a content item to inspect
+    # Check if there are any items to display
+    if len(items_df) == 0:
+        st.warning("No content items available for analysis.")
+        return
+    
+    # Get top items for selection
+    top_items = items_df.nlargest(20, 'score')
+    if len(top_items) == 0:
+        st.warning("No scored content items available.")
+        return
+    
     selected_title = st.selectbox(
         "Select content to inspect:",
-        items_df.nlargest(20, 'score')['title'].tolist()
+        top_items['title'].tolist()
     )
     
-    selected_item = items_df[items_df['title'] == selected_title].iloc[0]
+    # Find the selected item
+    selected_items = items_df[items_df['title'] == selected_title]
+    if len(selected_items) == 0:
+        st.error("Selected item not found.")
+        return
+    
+    selected_item = selected_items.iloc[0]
     
     # Show factor components
     col1, col2 = st.columns(2)
@@ -482,7 +561,7 @@ def show_content_explorer(items_df):
                     height=300,
                     margin=dict(l=40, r=40, t=40, b=40)
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             
             with col2:
                 st.metric("Views", f"{row['view_count']:,}")
@@ -530,7 +609,7 @@ def show_source_comparison(sources_df, items_df):
             color='Avg Score',
             color_continuous_scale='Viridis'
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Factor comparison
         st.subheader("Factor Comparison Across Sources")
@@ -551,13 +630,13 @@ def show_source_comparison(sources_df, items_df):
             yaxis_title="Average Score",
             yaxis_range=[0, 1]
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Detailed table
         st.subheader("Detailed Metrics")
         st.dataframe(
             metrics_df.round(3),
-            use_container_width=True,
+            width='stretch',
             hide_index=True
         )
 
@@ -608,7 +687,7 @@ def show_trends(items_df, selected_source, sources_df):
         )
     
     fig.update_traces(marker=dict(size=8, opacity=0.6))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     
     # All factors over time
     st.subheader("All Factors Timeline")
@@ -646,7 +725,7 @@ def show_trends(items_df, selected_source, sources_df):
         yaxis_range=[0, 1],
         hovermode='x unified'
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     
     # Monthly aggregation
     st.subheader("Monthly Performance")
@@ -678,7 +757,7 @@ def show_trends(items_df, selected_source, sources_df):
         yaxis_title="Average IdeaRank Score",
         yaxis_range=[0, 1]
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     
     # Show count information separately
     st.subheader("Content Volume by Month")
@@ -691,7 +770,7 @@ def show_trends(items_df, selected_source, sources_df):
         color_continuous_scale='Blues'
     )
     fig_count.update_layout(yaxis_title="Number of Items")
-    st.plotly_chart(fig_count, use_container_width=True)
+    st.plotly_chart(fig_count, width='stretch')
 
 
 if __name__ == "__main__":

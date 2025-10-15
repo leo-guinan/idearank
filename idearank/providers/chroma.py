@@ -413,18 +413,41 @@ class ChromaProvider:
             logger.info(f"Chroma Cloud provider ready: collection={collection_name}")
             
         else:
-            # Local mode - use dummy providers for now
-            # TODO: Implement local Chroma client support
+            # Local mode - use persistent ChromaDB with sentence transformers
             logger.info(f"Initializing local Chroma provider: {persist_directory}")
-            logger.warning("Local Chroma provider not fully implemented yet - using dummy providers")
             
-            from idearank.providers.embeddings import DummyEmbeddingProvider
-            from idearank.providers.neighborhoods import DummyNeighborhoodProvider
+            # Initialize local Chroma client
+            self.client = chromadb.PersistentClient(path=persist_directory)
             
-            self.embedding_provider = DummyEmbeddingProvider(dimension=384)
-            self.neighborhood_provider = DummyNeighborhoodProvider()
+            # Set up embedding function for local mode
+            if embedding_function == "sentence-transformers":
+                if model_name is None:
+                    model_name = "all-MiniLM-L6-v2"
+                emb_func = chromadb.utils.embedding_functions.SentenceTransformerEmbeddingFunction(
+                    model_name=model_name,
+                )
+            elif embedding_function == "default":
+                emb_func = chromadb.utils.embedding_functions.DefaultEmbeddingFunction()
+            else:
+                raise ValueError(
+                    f"Local mode only supports 'default' or 'sentence-transformers', got: {embedding_function}"
+                )
             
-            logger.info(f"Local provider ready (using dummy for now): {persist_directory}")
+            # Create local embedding provider
+            from idearank.providers.embeddings import SentenceTransformerEmbeddingProvider
+            self.embedding_provider = SentenceTransformerEmbeddingProvider(
+                model_name=model_name or "all-MiniLM-L6-v2"
+            )
+            
+            # Create local neighborhood provider
+            self.neighborhood_provider = self._create_local_neighborhood_provider(
+                collection_name, emb_func
+            )
+            
+            logger.info(
+                f"Local Chroma provider ready: {persist_directory}, "
+                f"collection={collection_name}, model={model_name or 'all-MiniLM-L6-v2'}"
+            )
     
     def get_embedding_provider(self):
         """Get the embedding provider."""
@@ -450,4 +473,150 @@ class ChromaProvider:
     def find_intra_source_neighbors(self, embedding, content_source_id: str, k: int = 15, exclude_ids=None):
         """Delegate to neighborhood provider."""
         return self.neighborhood_provider.find_intra_source_neighbors(embedding, content_source_id, k, exclude_ids)
+    
+    def _create_local_neighborhood_provider(self, collection_name: str, embedding_function):
+        """Create a local neighborhood provider using persistent Chroma client."""
+        
+        class LocalChromaNeighborhoodProvider(NeighborhoodProvider):
+            """Local ChromaDB neighborhood provider."""
+            
+            def __init__(self, client, collection_name: str, embedding_function):
+                self.client = client
+                self.collection_name = collection_name
+                self.embedding_function = embedding_function
+                self._content_cache: Dict[str, ContentItem] = {}
+                
+                # Get or create collection
+                try:
+                    self.collection = self.client.get_collection(
+                        name=collection_name,
+                        embedding_function=embedding_function,
+                    )
+                    logger.info(f"Using existing local collection: {collection_name}")
+                except Exception:
+                    self.collection = self.client.create_collection(
+                        name=collection_name,
+                        embedding_function=embedding_function,
+                        metadata={"description": "IdeaRank content item embeddings"},
+                    )
+                    logger.info(f"Created new local collection: {collection_name}")
+            
+            def find_global_neighbors(
+                self,
+                embedding: Embedding,
+                k: int = 50,
+                exclude_ids: Optional[List[str]] = None,
+            ) -> List[Tuple[ContentItem, float]]:
+                """Find k nearest neighbors from entire corpus."""
+                exclude_ids = exclude_ids or []
+                
+                # Query Chroma
+                results = self.collection.query(
+                    query_embeddings=[embedding.vector.tolist()],
+                    n_results=k + len(exclude_ids),
+                )
+                
+                # Parse results
+                neighbors = []
+                for i, content_id in enumerate(results['ids'][0]):
+                    if content_id in exclude_ids:
+                        continue
+                    
+                    if len(neighbors) >= k:
+                        break
+                    
+                    if content_id in self._content_cache:
+                        content_item = self._content_cache[content_id]
+                        distance = results['distances'][0][i]
+                        similarity = 1.0 / (1.0 + distance)
+                        neighbors.append((content_item, similarity))
+                
+                return neighbors
+            
+            def find_intra_source_neighbors(
+                self,
+                embedding: Embedding,
+                content_source_id: str,
+                k: int = 15,
+                exclude_ids: Optional[List[str]] = None,
+            ) -> List[Tuple[ContentItem, float]]:
+                """Find k nearest neighbors within a specific content source."""
+                exclude_ids = exclude_ids or []
+                
+                # Query with source filter
+                results = self.collection.query(
+                    query_embeddings=[embedding.vector.tolist()],
+                    n_results=k + len(exclude_ids) + 50,
+                    where={"content_source_id": content_source_id},
+                )
+                
+                # Parse results
+                neighbors = []
+                for i, content_id in enumerate(results['ids'][0]):
+                    if content_id in exclude_ids:
+                        continue
+                    
+                    if len(neighbors) >= k:
+                        break
+                    
+                    if content_id in self._content_cache:
+                        content_item = self._content_cache[content_id]
+                        distance = results['distances'][0][i]
+                        similarity = 1.0 / (1.0 + distance)
+                        neighbors.append((content_item, similarity))
+                
+                return neighbors
+            
+            def index_content_item(self, content_item: ContentItem) -> None:
+                """Add a content item to the Chroma collection."""
+                if content_item.embedding is None:
+                    raise ValueError(f"Content item {content_item.id} has no embedding")
+                
+                self.collection.add(
+                    ids=[content_item.id],
+                    embeddings=[content_item.embedding.vector.tolist()],
+                    metadatas=[{
+                        "content_source_id": content_item.content_source_id,
+                        "title": content_item.title,
+                        "published_at": content_item.published_at.isoformat(),
+                    }],
+                    documents=[content_item.full_text],
+                )
+                
+                self._content_cache[content_item.id] = content_item
+                logger.debug(f"Indexed content item: {content_item.id}")
+            
+            def index_content_batch(self, content_items: List[ContentItem]) -> None:
+                """Add multiple content items to the collection."""
+                valid_items = [item for item in content_items if item.embedding is not None]
+                
+                if not valid_items:
+                    logger.warning("No content items with embeddings to index")
+                    return
+                
+                ids = [item.id for item in valid_items]
+                embeddings = [item.embedding.vector.tolist() for item in valid_items]
+                metadatas = [
+                    {
+                        "content_source_id": item.content_source_id,
+                        "title": item.title,
+                        "published_at": item.published_at.isoformat(),
+                    }
+                    for item in valid_items
+                ]
+                documents = [item.full_text for item in valid_items]
+                
+                self.collection.add(
+                    ids=ids,
+                    embeddings=embeddings,
+                    metadatas=metadatas,
+                    documents=documents,
+                )
+                
+                for item in valid_items:
+                    self._content_cache[item.id] = item
+                
+                logger.info(f"Indexed {len(valid_items)} content items in batch")
+        
+        return LocalChromaNeighborhoodProvider(self.client, collection_name, embedding_function)
 

@@ -297,10 +297,10 @@ class TwitterArchiveParser:
         # Extract author
         author = data.get('user', {}).get('screen_name', data.get('author', 'unknown'))
         
-        # Extract engagement metrics
-        retweet_count = data.get('retweet_count', 0)
-        favorite_count = data.get('favorite_count', data.get('like_count', 0))
-        reply_count = data.get('reply_count', 0)
+        # Extract engagement metrics (ensure they're integers)
+        retweet_count = int(data.get('retweet_count', 0) or 0)
+        favorite_count = int(data.get('favorite_count', data.get('like_count', 0)) or 0)
+        reply_count = int(data.get('reply_count', 0) or 0)
         
         # Check if retweet or quote
         is_retweet = 'retweeted_status' in data or text.startswith('RT @')

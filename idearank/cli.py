@@ -41,14 +41,59 @@ logging.basicConfig(
 
 
 @click.group()
-@click.version_option(version="2.0.0", prog_name="idearank")
+@click.version_option(version="2.1.0", prog_name="idearank")
 def main():
     """IdeaRank - Multi-factor ranking for content.
     
     A PageRank replacement for ideas that analyzes uniqueness, cohesion,
     learning trajectory, quality, and trust signals across any content source.
+    
+    Now includes IdeaRank-Thought competition system for real-time reasoning evaluation!
     """
     pass
+
+
+@main.command()
+def demo_competition():
+    """Run the IdeaRank-Thought competition system demo."""
+    try:
+        import sys
+        import os
+        
+        # Add examples directory to path
+        examples_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples')
+        if os.path.exists(examples_dir):
+            sys.path.insert(0, examples_dir)
+        
+        # Import and run the demo
+        from competition_demo import run_competition_demo
+        console.print("[bold green]Starting IdeaRank-Thought Competition Demo[/bold green]")
+        run_competition_demo()
+        console.print("[bold green]Demo completed! Check the generated HTML files for visualizations.[/bold green]")
+    except ImportError as e:
+        console.print(f"[bold red]Error: Competition system not available[/bold red]")
+        console.print(f"Details: {e}")
+        console.print("Make sure all dependencies are installed and the examples directory exists.")
+    except Exception as e:
+        console.print(f"[bold red]Error running competition demo: {e}[/bold red]")
+        import traceback
+        console.print(traceback.format_exc())
+
+@main.command()
+def play_game():
+    """Play an interactive IdeaRank-Thought competition game."""
+    try:
+        from idearank.interactive_game import InteractiveGame
+        game = InteractiveGame()
+        game.run()
+    except ImportError as e:
+        console.print(f"[bold red]Error: Interactive game not available[/bold red]")
+        console.print(f"Details: {e}")
+        console.print("Make sure all dependencies are installed.")
+    except Exception as e:
+        console.print(f"[bold red]Error running interactive game: {e}[/bold red]")
+        import traceback
+        console.print(traceback.format_exc())
 
 
 @main.group()
@@ -662,7 +707,9 @@ def process_all(output: str, collection: str, openai_key: Optional[str], force: 
                 sources_skipped.append((source, existing_count))
                 continue
         
-        sources_to_process.append(source)
+        # Only add to process list if not already added (force case) and not skipped
+        if not force:
+            sources_to_process.append(source)
     
     # Show summary
     console.print(Panel.fit(
